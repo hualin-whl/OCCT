@@ -38,17 +38,10 @@
 #include <set>
 #include <typeinfo>
 #include <vector>
+#include <random>
 
 //! Size of test data sets.
 const int THE_TEST_SIZE = 5000;
-
-namespace {
-  // Auxiliary class to use in std::random_shuffle()
-  struct RandomGenerator {
-    RandomGenerator () { srand(1); }
-    ptrdiff_t operator () (ptrdiff_t upper) const { return rand() % upper; }
-  };
-}
 
 template<class CollectionType, class StlType>
 struct CollectionFiller
@@ -951,11 +944,13 @@ void TestPerformanceRandomIterator(Draw_Interpretor& di)
     aTimer.Reset();
     aTimer.Start();
     {
-      RandomGenerator aRandomGen;
+      std::random_device ran_dev;
+      std::mt19937 gen(ran_dev());
+      gen.seed(0x03ac38f2);
       for (Standard_Integer anIdx = 0; anIdx < 10; ++anIdx)
       {
-        std::sort           (aVector->begin(), aVector->end());
-        std::random_shuffle (aVector->begin(), aVector->end(), aRandomGen);
+        std::sort    (aVector->begin(), aVector->end());
+        std::shuffle (aVector->begin(), aVector->end(), gen);
       }
     }
     aTimer.Stop();
@@ -965,11 +960,13 @@ void TestPerformanceRandomIterator(Draw_Interpretor& di)
     aTimer.Reset();
     aTimer.Start();
     {
-      RandomGenerator aRandomGen;
+      std::random_device ran_dev;
+      std::mt19937 gen(ran_dev());
+      gen.seed(0x03ac38f2);
       for (Standard_Integer anIdx = 0; anIdx < 10; ++anIdx)
       {
-        std::sort           (aCollec->begin(), aCollec->end());
-        std::random_shuffle (aCollec->begin(), aCollec->end(), aRandomGen);
+        std::sort    (aCollec->begin(), aCollec->end());
+        std::shuffle (aCollec->begin(), aCollec->end(), gen);
       }
     }
     aTimer.Stop();
@@ -981,7 +978,7 @@ void TestPerformanceRandomIterator(Draw_Interpretor& di)
 
     // check that result is the same
     if ( ! std::equal (aVector->begin(), aVector->end(), aCollec->begin()) )
-      di << "Error: sequences are not the same at the end!\n";
+      di << "Error: sequences are not the same at the end (random iterator)!\n";
 
     delete aVector;
     delete aCollec;
@@ -1033,7 +1030,7 @@ void TestPerformanceForwardIterator(Draw_Interpretor& di)
 
     // check that result is the same
     if ( ! std::equal (aVector->begin(), aVector->end(), aCollec->begin()) )
-      di << "Error: sequences are not the same at the end!\n";
+      di << "Error: sequences are not the same at the end (forward iterator)!\n";
 
     delete aVector;
     delete aCollec;
@@ -1085,7 +1082,7 @@ void TestPerformanceBidirIterator(Draw_Interpretor& di)
 
     // check that result is the same
     if ( ! std::equal (aVector->begin(), aVector->end(), aCollec->begin()) )
-      di << "Error: sequences are not the same at the end!\n";
+      di << "Error: sequences are not the same at the end (bidir iterator)!\n";
 
     delete aVector;
     delete aCollec;
@@ -1115,7 +1112,7 @@ void TestPerformanceMapAccess(Draw_Interpretor& di)
     aTimer.Reset();
     aTimer.Start();
     {
-      for (Standard_Integer anIdx = 0; anIdx < 10000; ++anIdx)
+      for (size_t anIdx = 0; anIdx < 10000; ++anIdx)
       {
         if (aSet.find (aVec[anIdx + 1000]) == aSet.end())
           aResult = Standard_False;
@@ -1136,7 +1133,7 @@ void TestPerformanceMapAccess(Draw_Interpretor& di)
     aTimer.Reset();
     aTimer.Start();
     {
-      for (Standard_Integer anIdx = 0; anIdx < 10000; ++anIdx)
+      for (size_t anIdx = 0; anIdx < 10000; ++anIdx)
       {
         if (!aCollec->Contains (aVec[anIdx + 1000]))
           aResult = Standard_False;

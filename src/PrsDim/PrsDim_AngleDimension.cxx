@@ -47,7 +47,6 @@
 #include <Select3D_SensitiveSegment.hxx>
 #include <SelectMgr_Selection.hxx>
 #include <Standard_ProgramError.hxx>
-#include <UnitsAPI.hxx>
 #include <Geom_Line.hxx>
 #include <Geom_Plane.hxx>
 
@@ -691,8 +690,14 @@ void PrsDim_AngleDimension::Compute (const Handle(PrsMgr_PresentationManager)& ,
 
   aFirstArrowBegin  = aFirstAttach;
   aSecondArrowBegin = aSecondAttach;
-  aFirstArrowEnd    = aFirstAttach.Translated (-aFirstArrowVec);
-  aSecondArrowEnd   = aSecondAttach.Translated (-aSecondArrowVec);
+  aFirstArrowEnd    = aFirstAttach;
+  aSecondArrowEnd   = aSecondAttach;
+
+  if (aDimensionAspect->ArrowAspect()->IsZoomable())
+  {
+    aFirstArrowEnd.Translate (-aFirstArrowVec);
+    aSecondArrowEnd.Translate (-aSecondArrowVec);
+  }
 
   // Group1: stenciling text and the angle dimension arc
   thePresentation->NewGroup();

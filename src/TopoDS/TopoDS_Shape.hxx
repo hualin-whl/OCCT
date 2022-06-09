@@ -48,8 +48,6 @@ public:
   //! Creates a NULL Shape referring to nothing.
   TopoDS_Shape() : myOrient (TopAbs_EXTERNAL) {}
 
-#ifndef OCCT_NO_RVALUE_REFERENCE
-
   //! Generalized move constructor, accepting also sub-classes
   //! (TopoDS_Shape hierarchy declares only fake sub-classes with no extra fields).
   template<class T2>
@@ -71,8 +69,6 @@ public:
     return *this;
   }
 
-#endif
-
   //! Returns true if this shape is null. In other words, it
   //! references no underlying shape with the potential to
   //! be given a location and an orientation.
@@ -91,14 +87,26 @@ public:
   const TopLoc_Location& Location() const { return myLocation; }
 
   //! Sets the shape local coordinate system.
-  void Location (const TopLoc_Location& theLoc) { myLocation = theLoc; }
+  void Location (const TopLoc_Location& theLoc, const Standard_Boolean theRaiseExc = Standard_True)
+  {
+    const gp_Trsf& aTrsf = theLoc.Transformation();
+    if ((Abs(Abs(aTrsf.ScaleFactor()) - 1.) > TopLoc_Location::ScalePrec() || aTrsf.IsNegative()) && theRaiseExc)
+    {
+      //Exception
+      throw Standard_DomainError("Location with scaling transformation is forbidden");
+    }
+    else
+    {
+      myLocation = theLoc;
+    }
+  }
 
   //! Returns a  shape  similar to <me> with   the local
   //! coordinate system set to <Loc>.
-  TopoDS_Shape Located (const TopLoc_Location& theLoc) const
+  TopoDS_Shape Located (const TopLoc_Location& theLoc, const Standard_Boolean theRaiseExc = Standard_True) const
   {
     TopoDS_Shape aShape (*this);
-    aShape.Location (theLoc);
+    aShape.Location (theLoc, theRaiseExc);
     return aShape;
   }
 
@@ -176,13 +184,25 @@ public:
   void Convex (Standard_Boolean theIsConvex) { myTShape->Convex (theIsConvex); }
 
   //! Multiplies the Shape location by thePosition.
-  void Move (const TopLoc_Location& thePosition) { myLocation = thePosition * myLocation; }
+  void Move(const TopLoc_Location& thePosition, const Standard_Boolean theRaiseExc = Standard_True)
+  {
+    const gp_Trsf& aTrsf = thePosition.Transformation();
+    if ((Abs(Abs(aTrsf.ScaleFactor()) - 1.) > TopLoc_Location::ScalePrec() || aTrsf.IsNegative()) && theRaiseExc)
+    {
+      //Exception
+      throw Standard_DomainError("Moving with scaling transformation is forbidden");
+    }
+    else
+    {
+      myLocation = thePosition * myLocation;
+    }
+   }
 
   //! Returns a shape similar to <me> with a location multiplied by thePosition.
-  TopoDS_Shape Moved (const TopLoc_Location& thePosition) const
+  TopoDS_Shape Moved (const TopLoc_Location& thePosition, const Standard_Boolean theRaiseExc = Standard_True) const
   {
     TopoDS_Shape aShape (*this);
-    aShape.Move (thePosition);
+    aShape.Move (thePosition, theRaiseExc);
     return aShape;
   }
 

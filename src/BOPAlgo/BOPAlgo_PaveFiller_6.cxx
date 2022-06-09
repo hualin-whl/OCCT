@@ -20,7 +20,6 @@
 #include <BOPAlgo_Alerts.hxx>
 #include <BOPAlgo_SectionAttribute.hxx>
 #include <BOPAlgo_Tools.hxx>
-#include <BOPDS_CommonBlock.hxx>
 #include <BOPDS_CoupleOfPaveBlocks.hxx>
 #include <BOPDS_Curve.hxx>
 #include <BOPDS_DataMapOfPaveBlockListOfPaveBlock.hxx>
@@ -44,10 +43,7 @@
 #include <BRep_Builder.hxx>
 #include <BRep_TEdge.hxx>
 #include <BRep_Tool.hxx>
-#include <BRepAdaptor_Curve.hxx>
-#include <BRepAdaptor_Surface.hxx>
 #include <BRepBndLib.hxx>
-#include <BRepBuilderAPI_MakeVertex.hxx>
 #include <BRepLib.hxx>
 #include <BRepTools.hxx>
 #include <Geom_Curve.hxx>
@@ -65,13 +61,11 @@
 #include <IntTools_PntOn2Faces.hxx>
 #include <IntTools_SequenceOfCurves.hxx>
 #include <IntTools_SequenceOfPntOn2Faces.hxx>
-#include <IntTools_ShrunkRange.hxx>
 #include <IntTools_Tools.hxx>
 #include <NCollection_Vector.hxx>
 #include <Precision.hxx>
 #include <TColStd_ListOfInteger.hxx>
 #include <TColStd_MapOfInteger.hxx>
-#include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Compound.hxx>
@@ -92,14 +86,14 @@ static Standard_Real ToleranceFF(const BRepAdaptor_Surface& aBAS1,
 //=======================================================================
 class BOPAlgo_FaceFace : 
   public IntTools_FaceFace,
-  public BOPAlgo_Algo {
+  public BOPAlgo_ParallelAlgo {
 
  public:
   DEFINE_STANDARD_ALLOC
 
   BOPAlgo_FaceFace() : 
     IntTools_FaceFace(),  
-    BOPAlgo_Algo(),
+    BOPAlgo_ParallelAlgo(),
     myIF1(-1), myIF2(-1), myTolFF(1.e-7) {
   }
   //
@@ -153,7 +147,11 @@ class BOPAlgo_FaceFace :
   const gp_Trsf& Trsf() const { return myTrsf; }
   //
   virtual void Perform() {
-    BOPAlgo_Algo::UserBreak();
+    Message_ProgressScope aPS(myProgressRange, NULL, 1);
+    if (UserBreak(aPS))
+    {
+      return;
+    }
     try
     {
       OCC_CATCH_SIGNALS
@@ -231,14 +229,44 @@ typedef NCollection_Vector<BOPAlgo_FaceFace> BOPAlgo_VectorOfFaceFace;
 //function : PerformFF
 //purpose  : 
 //=======================================================================
-void BOPAlgo_PaveFiller::PerformFF()
+void BOPAlgo_PaveFiller::PerformFF(const Message_ProgressRange& theRange)
 {
+  // Update face info for all Face/Face intersection pairs
+  // and also for the rest of the faces with FaceInfo already initialized,
+  // i.e. anyhow touched faces.
   myIterator->Initialize(TopAbs_FACE, TopAbs_FACE);
   Standard_Integer iSize = myIterator->ExpectedLength();
-  if (!iSize) {
-    return; 
+
+  // Collect faces from intersection pairs
+  TColStd_MapOfInteger aMIFence;
+  Standard_Integer nF1, nF2;
+  for (; myIterator->More(); myIterator->Next())
+  {
+    myIterator->Value(nF1, nF2);
+    aMIFence.Add (nF1);
+    aMIFence.Add (nF2);
   }
-  //
+  // Collect the rest of the touched faces
+  for (Standard_Integer i = 0; i < myDS->NbSourceShapes(); ++i)
+  {
+    const BOPDS_ShapeInfo& aSI = myDS->ShapeInfo (i);
+    if (aSI.ShapeType() == TopAbs_FACE && aSI.HasReference())
+    {
+      aMIFence.Add (i);
+    }
+  }
+  // Update face info
+  myDS->UpdateFaceInfoOn (aMIFence);
+  myDS->UpdateFaceInfoIn (aMIFence);
+
+  if (!iSize)
+  {
+    // no intersection pairs found
+    return;
+  }
+
+  Message_ProgressScope aPSOuter(theRange, NULL, 1);
+
   BOPDS_VectorOfInterfFF& aFFs = myDS->InterfFF();
   aFFs.SetIncrement(iSize);
   //
@@ -250,25 +278,43 @@ void BOPAlgo_PaveFiller::PerformFF()
   // Post-processing options
   Standard_Boolean bSplitCurve = Standard_False;
   //
-  // Fence map to store faces with updated FaceInfo structure
-  TColStd_MapOfInteger aMIFence;
+  // Collect all pairs of Edge/Edge interferences to check if
+  // some faces have to be moved to obtain more precise intersection
+  NCollection_DataMap<BOPDS_Pair, TColStd_ListOfInteger, BOPDS_PairMapHasher> aEEMap;
+  const BOPDS_VectorOfInterfEE& aVEEs = myDS->InterfEE();
+  for (Standard_Integer iEE = 0; iEE < aVEEs.Size(); ++iEE)
+  {
+    const BOPDS_Interf& aEE = aVEEs(iEE);
+    if (!aEE.HasIndexNew())
+    {
+      continue;
+    }
+    Standard_Integer nE1, nE2;
+    aEE.Indices(nE1, nE2);
+
+    const Standard_Integer nVN = aEE.IndexNew();
+
+    BOPDS_Pair aPair(nE1, nE2);
+    TColStd_ListOfInteger* pPoints = aEEMap.ChangeSeek(aPair);
+    if (pPoints)
+    {
+      pPoints->Append(nVN);
+    }
+    else
+    {
+      pPoints = aEEMap.Bound(BOPDS_Pair(nE1, nE2), TColStd_ListOfInteger());
+      pPoints->Append(nVN);
+    }
+  }
+
   // Prepare the pairs of faces for intersection
   BOPAlgo_VectorOfFaceFace aVFaceFace;
-  Standard_Integer nF1, nF2;
-  //
-  for (; myIterator->More(); myIterator->Next()) {
-    myIterator->Value(nF1, nF2);
-
-    aMIFence.Add (nF1);
-    aMIFence.Add (nF2);
-  }
-  // Update face info
-  myDS->UpdateFaceInfoOn (aMIFence);
-  myDS->UpdateFaceInfoIn (aMIFence);
-
-  // Initialize interferences
   myIterator->Initialize(TopAbs_FACE, TopAbs_FACE);
   for (; myIterator->More(); myIterator->Next()) {
+    if (UserBreak(aPSOuter))
+    {
+      return;
+    }
     myIterator->Value(nF1, nF2);
 
     if (myGlue == BOPAlgo_GlueOff)
@@ -289,15 +335,87 @@ void BOPAlgo_PaveFiller::PerformFF()
           continue;
         }
       }
+
+      // Check if there is an intersection between edges of the faces. 
+      // If there is an intersection, check if there is a shift between the edges
+      // (intersection point is on some distance from the edges), and move one of 
+      // the faces to the point of exact edges intersection. This should allow 
+      // obtaining more precise intersection curves between the faces 
+      // (at least the curves should reach the boundary). 
+      // Note, that currently this check considers only closed edges (seam edges).
+      TopoDS_Face aFShifted1 = aF1, aFShifted2 = aF2;
+      // Keep shift value to use it as the tolerance for intersection curves
+      Standard_Real aShiftValue = 0.;
+
+      if (aBAS1.GetType() != GeomAbs_Plane ||
+        aBAS2.GetType() != GeomAbs_Plane) {
+
+        Standard_Boolean isFound = Standard_False;
+        for (TopExp_Explorer aExp1(aF1, TopAbs_EDGE); !isFound && aExp1.More(); aExp1.Next())
+        {
+          const TopoDS_Edge& aE1 = TopoDS::Edge(aExp1.Current());
+          const Standard_Integer nE1 = myDS->Index(aE1);
+
+          for (TopExp_Explorer aExp2(aF2, TopAbs_EDGE); !isFound && aExp2.More(); aExp2.Next())
+          {
+            const TopoDS_Edge& aE2 = TopoDS::Edge(aExp2.Current());
+            const Standard_Integer nE2 = myDS->Index(aE2);
+
+            Standard_Boolean bIsClosed1 = BRep_Tool::IsClosed(aE1, aF1);
+            Standard_Boolean bIsClosed2 = BRep_Tool::IsClosed(aE2, aF2);
+            if (!bIsClosed1 && !bIsClosed2)
+            {
+              continue;
+            }
+
+            const TColStd_ListOfInteger* pPoints = aEEMap.Seek(BOPDS_Pair(nE1, nE2));
+            if (!pPoints)
+            {
+              continue;
+            }
+
+            for (TColStd_ListOfInteger::Iterator itEEP(*pPoints); itEEP.More(); itEEP.Next())
+            {
+              const Standard_Integer& nVN = itEEP.Value();
+              const TopoDS_Vertex& aVN = TopoDS::Vertex(myDS->Shape(nVN));
+              const gp_Pnt& aPnt = BRep_Tool::Pnt(aVN);
+
+              // Compute points exactly on the edges 
+              GeomAPI_ProjectPointOnCurve& aProjPC1 = myContext->ProjPC(aE1);
+              GeomAPI_ProjectPointOnCurve& aProjPC2 = myContext->ProjPC(aE2);
+              aProjPC1.Perform(aPnt);
+              aProjPC2.Perform(aPnt);
+              if (!aProjPC1.NbPoints() && !aProjPC2.NbPoints())
+              {
+                continue;
+              }
+              gp_Pnt aP1 = aProjPC1.NbPoints() > 0 ? aProjPC1.NearestPoint() : aPnt;
+              gp_Pnt aP2 = aProjPC2.NbPoints() > 0 ? aProjPC2.NearestPoint() : aPnt;
+
+              Standard_Real aShiftDist = aP1.Distance(aP2);
+              if (aShiftDist > BRep_Tool::Tolerance(aVN))
+              {
+                // Move one of the faces to the point of exact intersection of edges
+                gp_Trsf aTrsf;
+                aTrsf.SetTranslation(bIsClosed1 ? gp_Vec(aP1, aP2) : gp_Vec(aP2, aP1));
+                TopLoc_Location aLoc(aTrsf);
+                (bIsClosed1 ? &aFShifted1 : &aFShifted2)->Move(aLoc);
+                aShiftValue = aShiftDist;
+                isFound = Standard_True;
+              }
+            }
+          }
+        }
+      }
       //
       BOPAlgo_FaceFace& aFaceFace=aVFaceFace.Appended();
       //
       aFaceFace.SetRunParallel (myRunParallel);
       aFaceFace.SetIndices(nF1, nF2);
-      aFaceFace.SetFaces(aF1, aF2);
+      aFaceFace.SetFaces(aFShifted1, aFShifted2);
       aFaceFace.SetBoxes (myDS->ShapeInfo (nF1).Box(), myDS->ShapeInfo (nF2).Box());
-      // compute minimal tolerance for the curves
-      Standard_Real aTolFF = ToleranceFF(aBAS1, aBAS2);
+      // Note: in case of faces with closed edges it should not be less than value of the shift
+      Standard_Real aTolFF = Max(aShiftValue, ToleranceFF(aBAS1, aBAS2));
       aFaceFace.SetTolFF(aTolFF);
       //
       IntSurf_ListOfPntOn2S aListOfPnts;
@@ -309,10 +427,6 @@ void BOPAlgo_PaveFiller::PerformFF()
       //
       aFaceFace.SetParameters(bApprox, bCompC2D1, bCompC2D2, anApproxTol);
       aFaceFace.SetFuzzyValue(myFuzzyValue);
-      if (myProgressScope != NULL)
-      {
-        aFaceFace.SetProgressIndicator(*myProgressScope);
-      }
     }
     else {
       // for the Glue mode just add all interferences of that type
@@ -323,13 +437,28 @@ void BOPAlgo_PaveFiller::PerformFF()
     }
   }//for (; myIterator->More(); myIterator->Next()) {
   //
+  Standard_Integer k, aNbFaceFace = aVFaceFace.Length();;
+  Message_ProgressScope aPS(aPSOuter.Next(), "Performing Face-Face intersection", aNbFaceFace);
+  for (k = 0; k < aNbFaceFace; k++)
+  {
+    BOPAlgo_FaceFace& aFaceFace = aVFaceFace.ChangeValue(k);
+    aFaceFace.SetProgressRange(aPS.Next());
+  }
   //======================================================
   // Perform intersection
   BOPTools_Parallel::Perform (myRunParallel, aVFaceFace);
+  if (UserBreak(aPSOuter))
+  {
+    return;
+  }
   //======================================================
   // Treatment of the results
-  Standard_Integer k, aNbFaceFace = aVFaceFace.Length();
+
   for (k = 0; k < aNbFaceFace; ++k) {
+    if (UserBreak(aPSOuter))
+    {
+      return;
+    }
     BOPAlgo_FaceFace& aFaceFace = aVFaceFace(k);
     aFaceFace.Indices(nF1, nF2);
     if (!aFaceFace.IsDone() || aFaceFace.HasErrors()) {
@@ -377,6 +506,10 @@ void BOPAlgo_PaveFiller::PerformFF()
     //
     BOPDS_VectorOfCurve& aVNC = aFF.ChangeCurves();
     for (Standard_Integer i = 1; i <= aNbCurves; ++i) {
+      if (UserBreak(aPSOuter))
+      {
+        return;
+      }
       Bnd_Box aBox;
       const IntTools_Curve& aIC = aCvsX(i);
       Standard_Boolean bIsValid = IntTools_Tools::CheckCurve(aIC, aBox);
@@ -427,14 +560,16 @@ static void UpdateSavedTolerance(const BOPDS_PDS& theDS,
 //function : MakeBlocks
 //purpose  : 
 //=======================================================================
-void BOPAlgo_PaveFiller::MakeBlocks()
+void BOPAlgo_PaveFiller::MakeBlocks(const Message_ProgressRange& theRange)
 {
+  Message_ProgressScope aPSOuter(theRange, NULL, 4);
   if (myGlue != BOPAlgo_GlueOff) {
     return;
   }
   //
   BOPDS_VectorOfInterfFF& aFFs=myDS->InterfFF();
   Standard_Integer aNbFF = aFFs.Length();
+  Message_ProgressScope aPS(aPSOuter.Next(), "Building section edges", aNbFF);
   if (!aNbFF) {
     return;
   }
@@ -472,9 +607,11 @@ void BOPAlgo_PaveFiller::MakeBlocks()
   // Map of PaveBlocks with the faces to which it has to be added
   BOPAlgo_DataMapOfPaveBlockListOfInteger aPBFacesMap;
   //
-  for (i=0; i<aNbFF; ++i) {
-    //
-    UserBreak();
+  for (i=0; i<aNbFF; ++i, aPS.Next()) {
+    if (UserBreak(aPS))
+    {
+      return;
+    }
     //
     BOPDS_InterfFF& aFF=aFFs(i);
     aFF.Indices(nF1, nF2);
@@ -781,7 +918,7 @@ void BOPAlgo_PaveFiller::MakeBlocks()
 
   // post treatment
   MakeSDVerticesFF(aDMVLV, aDMNewSD);
-  PostTreatFF(aMSCPB, aDMExEdges, aDMNewSD, aMicroPB, aVertsOnRejectedPB, aAllocator);
+  PostTreatFF(aMSCPB, aDMExEdges, aDMNewSD, aMicroPB, aVertsOnRejectedPB, aAllocator, aPSOuter.Next(2));
   if (HasErrors()) {
     return;
   }
@@ -795,7 +932,8 @@ void BOPAlgo_PaveFiller::MakeBlocks()
   //
   // Treat possible common zones by trying to put each section edge
   // into all faces, not participated in creation of that edge, as IN edge
-  PutSEInOtherFaces();
+
+  PutSEInOtherFaces(aPSOuter.Next());
   //
   //-----------------------------------------------------scope t
   aMVStick.Clear();
@@ -841,7 +979,8 @@ void BOPAlgo_PaveFiller::PostTreatFF
      TColStd_DataMapOfIntegerInteger& aDMNewSD,
      const BOPDS_IndexedMapOfPaveBlock& theMicroPB,
      const TopTools_IndexedMapOfShape& theVertsOnRejectedPB,
-     const Handle(NCollection_BaseAllocator)& theAllocator)
+     const Handle(NCollection_BaseAllocator)& theAllocator,
+     const Message_ProgressRange& theRange)
 {
   Standard_Integer aNbS = theMSCPB.Extent();
   if (!aNbS) {
@@ -1022,14 +1161,12 @@ void BOPAlgo_PaveFiller::PostTreatFF
     }
   }
   //
+  Message_ProgressScope aPS(theRange, "Intersection of section edges", 1);
+
   // 2 Fuse shapes
-  if (myProgressScope != NULL)
-  {
-    aPF.SetProgressIndicator(*myProgressScope);
-  }
   aPF.SetRunParallel(myRunParallel);
   aPF.SetArguments(aLS);
-  aPF.Perform();
+  aPF.Perform(aPS.Next());
   if (aPF.HasErrors()) {
     AddError (new BOPAlgo_AlertPostTreatFF);
     return;
@@ -3257,7 +3394,7 @@ void BOPAlgo_PaveFiller::UpdatePaveBlocks
 //function : RemovePaveBlocks
 //purpose  : 
 //=======================================================================
-void BOPAlgo_PaveFiller::RemovePaveBlocks(const TColStd_MapOfInteger theEdges)
+void BOPAlgo_PaveFiller::RemovePaveBlocks(const TColStd_MapOfInteger& theEdges)
 {
   // Remove all pave blocks referring to input edges:
   //
@@ -3663,7 +3800,7 @@ void BOPAlgo_PaveFiller::CorrectToleranceOfSE()
 //function : PutSEInOtherFaces
 //purpose  : 
 //=======================================================================
-void BOPAlgo_PaveFiller::PutSEInOtherFaces()
+void BOPAlgo_PaveFiller::PutSEInOtherFaces(const Message_ProgressRange& theRange)
 {
   // Try to intersect each section edge with the faces
   // not participated in its creation
@@ -3673,6 +3810,7 @@ void BOPAlgo_PaveFiller::PutSEInOtherFaces()
 
   BOPDS_VectorOfInterfFF& aFFs = myDS->InterfFF();
   const Standard_Integer aNbFF = aFFs.Length();
+  Message_ProgressScope aPS(theRange, NULL, 1);
   for (Standard_Integer i = 0; i < aNbFF; ++i)
   {
     const BOPDS_VectorOfCurve& aVNC = aFFs(i).Curves();
@@ -3686,7 +3824,7 @@ void BOPAlgo_PaveFiller::PutSEInOtherFaces()
     }
   }
   // Perform intersection of collected pave blocks
-  ForceInterfEF(aMPBScAll, Standard_False);
+  ForceInterfEF(aMPBScAll, aPS.Next(), Standard_False);
 }
 
 //=======================================================================

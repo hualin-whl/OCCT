@@ -23,10 +23,7 @@
 
 #include <Standard_Integer.hxx>
 #include <TColStd_HArray1OfReal.hxx>
-#include <TColStd_HArray2OfReal.hxx>
 #include <Standard_Real.hxx>
-#include <GeomAbs_IsoType.hxx>
-#include <GeomAbs_Shape.hxx>
 #include <AdvApp2Var_Context.hxx>
 #include <AdvApp2Var_Network.hxx>
 #include <AdvApp2Var_Framework.hxx>
@@ -34,8 +31,6 @@
 #include <TColGeom_HArray1OfSurface.hxx>
 #include <AdvApp2Var_EvaluatorFunc2Var.hxx>
 #include <Standard_OStream.hxx>
-class Standard_OutOfRange;
-class Standard_ConstructionError;
 class AdvApprox_Cutting;
 class AdvApp2Var_Criterion;
 class Geom_BSplineSurface;

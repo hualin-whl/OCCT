@@ -24,9 +24,7 @@
 #include <TopoDS_Shape.hxx>
 #include <BRepFill_SequenceOfSection.hxx>
 #include <TopTools_DataMapOfShapeListOfShape.hxx>
-#include <Standard_Real.hxx>
 #include <Standard_Integer.hxx>
-#include <Standard_Boolean.hxx>
 #include <TopTools_HArray2OfShape.hxx>
 #include <GeomFill_Trihedron.hxx>
 #include <BRepFill_TransitionStyle.hxx>
@@ -39,14 +37,9 @@
 class Law_Function;
 class BRepFill_LocationLaw;
 class BRepFill_SectionLaw;
-class Standard_DomainError;
-class StdFail_NotDone;
-class TopoDS_Wire;
 class gp_Ax2;
 class gp_Dir;
-class TopoDS_Shape;
 class TopoDS_Vertex;
-class BRepFill_Section;
 class gp_Trsf;
 class BRepFill_Sweep;
 

@@ -19,26 +19,17 @@
 
 #include <BRepLib.hxx>
 
-#include <Adaptor3d_CurveOnSurface.hxx>
 #include <AdvApprox_ApproxAFunction.hxx>
 #include <AppParCurves_MultiBSpCurve.hxx>
-#include <AppParCurves_MultiCurve.hxx>
 #include <Approx_CurvilinearParameter.hxx>
 #include <Approx_SameParameter.hxx>
-#include <Bnd_Box.hxx>
 #include <BRep_Builder.hxx>
-#include <BRep_CurveRepresentation.hxx>
 #include <BRep_GCurve.hxx>
-#include <BRep_ListIteratorOfListOfCurveRepresentation.hxx>
-#include <BRep_ListOfCurveRepresentation.hxx>
 #include <BRepCheck.hxx>
 #include <BRep_TEdge.hxx>
-#include <BRep_TFace.hxx>
 #include <BRep_Tool.hxx>
 #include <BRep_TVertex.hxx>
 #include <BRepAdaptor_Curve.hxx>
-#include <BRepAdaptor_Curve2d.hxx>
-#include <BRepAdaptor_Surface.hxx>
 #include <BRepBndLib.hxx>
 #include <BRepClass3d_SolidClassifier.hxx>
 #include <BRepLib_MakeFace.hxx>
@@ -46,13 +37,10 @@
 #include <ElSLib.hxx>
 #include <Extrema_LocateExtPC.hxx>
 #include <GCPnts_QuasiUniformDeflection.hxx>
-#include <Geom2d_BSplineCurve.hxx>
 #include <Geom2d_Curve.hxx>
-#include <Geom2d_TrimmedCurve.hxx>
 #include <Geom2dAdaptor.hxx>
 #include <Geom2dAdaptor_Curve.hxx>
 #include <Geom2dConvert.hxx>
-#include <Geom_BSplineCurve.hxx>
 #include <Geom_BSplineSurface.hxx>
 #include <Geom_Curve.hxx>
 #include <Geom_Plane.hxx>
@@ -72,11 +60,9 @@
 #include <ProjLib_ProjectedCurve.hxx>
 #include <Standard_ErrorHandler.hxx>
 #include <Standard_Real.hxx>
-#include <TColgp_Array1OfPnt.hxx>
 #include <TColgp_Array1OfPnt2d.hxx>
 #include <TColStd_Array1OfReal.hxx>
 #include <TColStd_MapOfTransient.hxx>
-#include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Edge.hxx>
@@ -84,10 +70,6 @@
 #include <TopoDS_Shape.hxx>
 #include <TopoDS_Solid.hxx>
 #include <TopoDS_Vertex.hxx>
-#include <TopTools_IndexedDataMapOfShapeListOfShape.hxx>
-#include <TopTools_ListIteratorOfListOfShape.hxx>
-#include <TopTools_MapOfShape.hxx>
-#include <TShort_HArray1OfShortReal.hxx>
 #include <TColgp_Array1OfXY.hxx>
 #include <BRepTools_ReShape.hxx>
 #include <TopTools_DataMapOfShapeReal.hxx>
@@ -1978,6 +1960,12 @@ public:
     return aDeriv.Transformed(mySurfaceTrsf);
   }
 
+  gp_Dir Normal()
+  {
+    gp_Dir aNormal = mySurfaceProps.Normal();
+    return aNormal.Transformed(mySurfaceTrsf);
+  }
+
   // Calculate principal curvatures, which consist of minimal and maximal normal curvatures and
   // the directions on the tangent plane (principal direction) where the extremums are reached
   void Curvature(gp_Dir& thePrincipalDir1, Standard_Real& theCurvature1,
@@ -1991,6 +1979,12 @@ public:
       theCurvature1 = -theCurvature1;
       theCurvature2 = -theCurvature2;
     }
+    if (mySurfaceTrsf.IsNegative())
+    {
+      theCurvature1 = -theCurvature1;
+      theCurvature2 = -theCurvature2;
+    }
+
     thePrincipalDir1.Transform(mySurfaceTrsf);
     thePrincipalDir2.Transform(mySurfaceTrsf);
   }
@@ -2010,32 +2004,63 @@ private:
 //purpose  : check the angle at the border between two squares.
 //           Two shares should have a shared front edge.
 //=======================================================================
-static GeomAbs_Shape tgtfaces(const TopoDS_Edge& Ed,
-                              const TopoDS_Face& F1,
-                              const TopoDS_Face& F2,
-                              const Standard_Real theAngleTol)
+GeomAbs_Shape BRepLib::ContinuityOfFaces(const TopoDS_Edge&  theEdge,
+                                         const TopoDS_Face&  theFace1,
+                                         const TopoDS_Face&  theFace2,
+                                         const Standard_Real theAngleTol)
 {
-  Standard_Boolean isSeam = F1.IsEqual(F2);
+  Standard_Boolean isSeam = theFace1.IsEqual(theFace2);
 
-  TopoDS_Edge E = Ed;
+  TopoDS_Edge anEdgeInFace1, anEdgeInFace2;
+  Handle(Geom2d_Curve) aCurve1, aCurve2;
+  
+  Standard_Real aFirst, aLast;
+  
+  if (!theFace1.IsSame (theFace2) &&
+      BRep_Tool::IsClosed (theEdge, theFace1) &&
+      BRep_Tool::IsClosed (theEdge, theFace2))
+  {
+    //Find the edge in the face 1: this edge will have correct orientation
+    TopoDS_Face aFace1 = theFace1;
+    aFace1.Orientation (TopAbs_FORWARD);
+    TopExp_Explorer anExplo (aFace1, TopAbs_EDGE);
+    for (; anExplo.More(); anExplo.Next())
+    {
+      const TopoDS_Edge& anEdge = TopoDS::Edge (anExplo.Current());
+      if (anEdge.IsSame (theEdge))
+      {
+        anEdgeInFace1 = anEdge;
+        break;
+      }
+    }
+    if (anEdgeInFace1.IsNull())
+      return GeomAbs_C0;
+    
+    aCurve1 = BRep_Tool::CurveOnSurface (anEdgeInFace1, aFace1, aFirst, aLast);
+    TopoDS_Face aFace2 = theFace2;
+    aFace2.Orientation (TopAbs_FORWARD);
+    anEdgeInFace2 = anEdgeInFace1;
+    anEdgeInFace2.Reverse();
+    aCurve2 = BRep_Tool::CurveOnSurface (anEdgeInFace2, aFace2, aFirst, aLast);
+  }
+  else
+  {
+    // Obtaining of pcurves of edge on two faces.
+    anEdgeInFace1 = anEdgeInFace2 = theEdge;
+    aCurve1 = BRep_Tool::CurveOnSurface (anEdgeInFace1, theFace1, aFirst, aLast);
+    //For the case of seam edge
+    if (theFace1.IsSame(theFace2))
+      anEdgeInFace2.Reverse();
+    aCurve2 = BRep_Tool::CurveOnSurface (anEdgeInFace2, theFace2, aFirst, aLast);
+  }
 
-  // Check if pcurves exist on both faces of edge
-  Standard_Real aFirst,aLast;
-  E.Orientation(TopAbs_FORWARD);
-  Handle(Geom2d_Curve) aCurve1 = BRep_Tool::CurveOnSurface(E, F1, aFirst, aLast);
-  if(aCurve1.IsNull())
-    return GeomAbs_C0;
-
-  if (isSeam)
-    E.Orientation(TopAbs_REVERSED);
-  Handle(Geom2d_Curve) aCurve2 = BRep_Tool::CurveOnSurface(E, F2, aFirst, aLast);
-  if(aCurve2.IsNull())
+  if (aCurve1.IsNull() || aCurve2.IsNull())
     return GeomAbs_C0;
 
   TopLoc_Location aLoc1, aLoc2;
-  Handle(Geom_Surface) aSurface1 = BRep_Tool::Surface(F1, aLoc1);
+  Handle(Geom_Surface) aSurface1 = BRep_Tool::Surface (theFace1, aLoc1);
   const gp_Trsf& aSurf1Trsf = aLoc1.Transformation();
-  Handle(Geom_Surface) aSurface2 = BRep_Tool::Surface(F2, aLoc2);
+  Handle(Geom_Surface) aSurface2 = BRep_Tool::Surface (theFace2, aLoc2);
   const gp_Trsf& aSurf2Trsf = aLoc2.Transformation();
 
   if (aSurface1->IsKind(STANDARD_TYPE(Geom_RectangularTrimmedSurface)))
@@ -2052,11 +2077,11 @@ static GeomAbs_Shape tgtfaces(const TopoDS_Edge& Ed,
     return GeomAbs_CN;
   }
 
-  SurfaceProperties aSP1(aSurface1, aSurf1Trsf, aCurve1, F1.Orientation() == TopAbs_REVERSED);
-  SurfaceProperties aSP2(aSurface2, aSurf2Trsf, aCurve2, F2.Orientation() == TopAbs_REVERSED);
+  SurfaceProperties aSP1(aSurface1, aSurf1Trsf, aCurve1, theFace1.Orientation() == TopAbs_REVERSED);
+  SurfaceProperties aSP2(aSurface2, aSurf2Trsf, aCurve2, theFace2.Orientation() == TopAbs_REVERSED);
 
   Standard_Real f, l, eps;
-  BRep_Tool::Range(E,f,l);
+  BRep_Tool::Range (theEdge,f,l);
   Extrema_LocateExtPC ext;
   Handle(BRepAdaptor_Curve) aHC2;
 
@@ -2067,7 +2092,6 @@ static GeomAbs_Shape tgtfaces(const TopoDS_Edge& Ed,
   const Standard_Real anAngleTol2 = theAngleTol * theAngleTol;
 
   gp_Vec aDer1, aDer2;
-  gp_Vec aNorm1;
   Standard_Real aSqLen1, aSqLen2;
   gp_Dir aCrvDir1[2], aCrvDir2[2];
   Standard_Real aCrvLen1[2], aCrvLen2[2];
@@ -2095,13 +2119,26 @@ static GeomAbs_Shape tgtfaces(const TopoDS_Edge& Ed,
     aDer2 = aSP2.Derivative();
     aSqLen2 = aDer2.SquareMagnitude();
     Standard_Boolean isSmoothSuspect = (aDer1.CrossSquareMagnitude(aDer2) <= anAngleTol2 * aSqLen1 * aSqLen2);
+    if (isSmoothSuspect)
+    {
+      gp_Dir aNormal1 = aSP1.Normal();
+      if (theFace1.Orientation() == TopAbs_REVERSED)
+        aNormal1.Reverse();
+      gp_Dir aNormal2 = aSP2.Normal();
+      if (theFace2.Orientation() == TopAbs_REVERSED)
+        aNormal2.Reverse();
+      
+      if (aNormal1 * aNormal2 < 0.)
+        return GeomAbs_C0;
+    }
+    
     if (!isSmoothSuspect)
     {
       // Refine by projection
       if (aHC2.IsNull())
       {
         // adaptor for pcurve on the second surface
-        aHC2 = new BRepAdaptor_Curve (E, F2);
+        aHC2 = new BRepAdaptor_Curve (anEdgeInFace2, theFace2);
         ext.Initialize(*aHC2, f, l, Precision::PConfusion());
       }
       ext.Perform(aSP1.Value(), u);
@@ -2297,9 +2334,8 @@ void BRepLib::EncodeRegularity(TopoDS_Edge& E,
   BRep_Builder B;
   if(BRep_Tool::Continuity(E,F1,F2)<=GeomAbs_C0){
     try {
-      GeomAbs_Shape aCont = tgtfaces(E, F1, F2, TolAng);
+      GeomAbs_Shape aCont = ContinuityOfFaces(E, F1, F2, TolAng);
       B.Continuity(E,F1,F2,aCont);
-      
     }
     catch(Standard_Failure const&)
     {
@@ -2417,7 +2453,7 @@ Standard_Boolean BRepLib::
 
       gp_Vec3f aNorm1f, aNorm2f;
       aPT1->Normal (aFNodF1, aNorm1f);
-      aPT1->Normal (aFNodF2, aNorm2f);
+      aPT2->Normal (aFNodF2, aNorm2f);
       const gp_XYZ aNorm1 (aNorm1f.x(), aNorm1f.y(), aNorm1f.z());
       const gp_XYZ aNorm2 (aNorm2f.x(), aNorm2f.y(), aNorm2f.z());
       const Standard_Real aDot = aNorm1 * aNorm2;
@@ -2432,6 +2468,174 @@ Standard_Boolean BRepLib::
   }
 
   return aRetVal;
+}
+
+//=======================================================================
+//function : UpdateDeflection
+//purpose  : 
+//=======================================================================
+namespace
+{
+  //! Tool to estimate deflection of the given UV point
+  //! with regard to its representation in 3D space.
+  struct EvalDeflection
+  {
+    BRepAdaptor_Surface Surface;
+
+    //! Initializes tool with the given face.
+    EvalDeflection (const TopoDS_Face& theFace)
+      : Surface (theFace)
+    {
+    }
+
+    //! Evaluates deflection of the given 2d point from its 3d representation.
+    Standard_Real Eval (const gp_Pnt2d& thePoint2d, const gp_Pnt& thePoint3d)
+    {
+      gp_Pnt aPnt;
+      Surface.D0 (thePoint2d.X (), thePoint2d.Y (), aPnt);
+      return (thePoint3d.XYZ () - aPnt.XYZ ()).SquareModulus ();
+    }
+  };
+
+  //! Represents link of triangulation.
+  struct Link
+  {
+    Standard_Integer Node[2];
+
+    //! Constructor
+    Link (const Standard_Integer theNode1, const Standard_Integer theNode2)
+    {
+      Node[0] = theNode1;
+      Node[1] = theNode2;
+    }
+
+    //! Computes a hash code for the this link
+    Standard_Integer HashCode (const Standard_Integer theUpperBound) const
+    {
+      return ::HashCode (Node[0] + Node[1], theUpperBound);
+    }
+
+    //! Returns true if this link has the same nodes as the other.
+    Standard_Boolean IsEqual (const Link& theOther) const
+    {
+      return ((Node[0] == theOther.Node[0] && Node[1] == theOther.Node[1]) ||
+              (Node[0] == theOther.Node[1] && Node[1] == theOther.Node[0]));
+    }
+
+    //! Alias for IsEqual.
+    Standard_Boolean operator ==(const Link& theOther) const
+    {
+      return IsEqual (theOther);
+    }
+  };
+
+  //! Computes a hash code for the given link
+  inline Standard_Integer HashCode (const Link& theLink, const Standard_Integer theUpperBound)
+  {
+    return theLink.HashCode (theUpperBound);
+  }
+}
+
+void BRepLib::UpdateDeflection (const TopoDS_Shape& theShape)
+{
+  TopExp_Explorer anExpFace (theShape, TopAbs_FACE);
+  for (; anExpFace.More(); anExpFace.Next())
+  {
+    const TopoDS_Face& aFace = TopoDS::Face (anExpFace.Current());
+    const Handle(Geom_Surface) aSurf = BRep_Tool::Surface (aFace);
+    if (aSurf.IsNull())
+    {
+      continue;
+    }
+
+    TopLoc_Location aLoc;
+    const Handle(Poly_Triangulation)& aPT = BRep_Tool::Triangulation (aFace, aLoc);
+    if (aPT.IsNull() || !aPT->HasUVNodes())
+    {
+      continue;
+    }
+
+    // Collect all nodes of degenerative edges and skip elements
+    // build upon them due to huge distortions introduced by passage
+    // from UV space to 3D.
+    NCollection_Map<Standard_Integer> aDegNodes;
+    TopExp_Explorer anExpEdge (aFace, TopAbs_EDGE);
+    for (; anExpEdge.More(); anExpEdge.Next())
+    {
+      const TopoDS_Edge& aEdge = TopoDS::Edge (anExpEdge.Current());
+      if (BRep_Tool::Degenerated (aEdge))
+      {
+        const Handle(Poly_PolygonOnTriangulation)& aPolygon = BRep_Tool::PolygonOnTriangulation (aEdge, aPT, aLoc);
+        if (aPolygon.IsNull ())
+        {
+          continue;
+        }
+
+        for (Standard_Integer aNodeIt = aPolygon->Nodes().Lower(); aNodeIt <= aPolygon->Nodes().Upper(); ++aNodeIt)
+        {
+          aDegNodes.Add (aPolygon->Node (aNodeIt));
+        }
+      }
+    }
+
+    EvalDeflection aTool (aFace);
+    NCollection_Map<Link> aLinks;
+    Standard_Real aSqDeflection = 0.;
+    const gp_Trsf& aTrsf = aLoc.Transformation();
+    for (Standard_Integer aTriIt = 1; aTriIt <= aPT->NbTriangles(); ++aTriIt)
+    {
+      const Poly_Triangle& aTriangle = aPT->Triangle (aTriIt);
+
+      int aNode[3];
+      aTriangle.Get (aNode[0], aNode[1], aNode[2]);
+      if (aDegNodes.Contains (aNode[0]) ||
+          aDegNodes.Contains (aNode[1]) ||
+          aDegNodes.Contains (aNode[2]))
+      {
+        continue;
+      }
+
+      const gp_Pnt aP3d[3] = {
+        aPT->Node (aNode[0]).Transformed (aTrsf),
+        aPT->Node (aNode[1]).Transformed (aTrsf),
+        aPT->Node (aNode[2]).Transformed (aTrsf)
+      };
+
+      const gp_Pnt2d aP2d[3] = {
+        aPT->UVNode (aNode[0]),
+        aPT->UVNode (aNode[1]),
+        aPT->UVNode (aNode[2])
+      };
+
+      // Check midpoint of triangle.
+      const gp_Pnt   aMid3d_t = (aP3d[0].XYZ() + aP3d[1].XYZ() + aP3d[2].XYZ()) / 3.;
+      const gp_Pnt2d aMid2d_t = (aP2d[0].XY () + aP2d[1].XY () + aP2d[2].XY ()) / 3.;
+
+      aSqDeflection = Max (aSqDeflection, aTool.Eval (aMid2d_t, aMid3d_t));
+
+      for (Standard_Integer i = 0; i < 3; ++i)
+      {
+        const Standard_Integer j = (i + 1) % 3;
+        const Link aLink (aNode[i], aNode[j]);
+        if (!aLinks.Add (aLink))
+        {
+          // Do not estimate boundary links due to high distortions at the edge.
+          const gp_Pnt&   aP3d1 = aP3d[i];
+          const gp_Pnt&   aP3d2 = aP3d[j];
+
+          const gp_Pnt2d& aP2d1 = aP2d[i];
+          const gp_Pnt2d& aP2d2 = aP2d[j];
+
+          const gp_Pnt   aMid3d_l = (aP3d1.XYZ() + aP3d2.XYZ()) / 2.;
+          const gp_Pnt2d aMid2d_l = (aP2d1.XY () + aP2d2.XY ()) / 2.;
+
+          aSqDeflection = Max (aSqDeflection, aTool.Eval (aMid2d_l, aMid3d_l));
+        }
+      }
+    }
+
+    aPT->Deflection (Sqrt (aSqDeflection));
+  }
 }
 
 //=======================================================================

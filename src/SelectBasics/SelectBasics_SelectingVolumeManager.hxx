@@ -23,7 +23,6 @@
 #include <SelectMgr_SelectionType.hxx>
 #include <Standard_Dump.hxx>
 
-class Bnd_Box;
 class gp_Pnt;
 
 //! This class provides an interface for selecting volume manager,
@@ -96,6 +95,22 @@ public:
   virtual Standard_Boolean OverlapsSphere (const gp_Pnt& theCenter,
                                            const Standard_Real theRadius,
                                            Standard_Boolean* theInside = NULL) const = 0;
+
+  //! Returns true if selecting volume is overlapped by cylinder (or cone) with radiuses theBottomRad
+  //! and theTopRad, height theHeight and transformation to apply theTrsf.
+  virtual Standard_Boolean OverlapsCylinder (const Standard_Real theBottomRad,
+                                             const Standard_Real theTopRad,
+                                             const Standard_Real theHeight,
+                                             const gp_Trsf& theTrsf,
+                                             SelectBasics_PickResult& thePickResult) const = 0;
+
+  //! Returns true if selecting volume is overlapped by cylinder (or cone) with radiuses theBottomRad
+  //! and theTopRad, height theHeight and transformation to apply theTrsf.
+  virtual Standard_Boolean OverlapsCylinder (const Standard_Real theBottomRad,
+                                             const Standard_Real theTopRad,
+                                             const Standard_Real theHeight,
+                                             const gp_Trsf& theTrsf,
+                                             Standard_Boolean* theInside = NULL) const = 0;
 
 public:
 

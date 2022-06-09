@@ -14,8 +14,6 @@
 // commercial license or contractual agreement.
 
 #include <BRepMesh_BaseMeshAlgo.hxx>
-#include <BRepMesh_DataStructureOfDelaun.hxx>
-#include <IMeshData_Face.hxx>
 #include <IMeshData_Wire.hxx>
 #include <IMeshData_Edge.hxx>
 #include <IMeshData_PCurve.hxx>
@@ -243,7 +241,6 @@ void BRepMesh_BaseMeshAlgo::commitSurfaceTriangulation()
 
   collectNodes(aTriangulation);
 
-  aTriangulation->Deflection(myDFace->GetDeflection());
   BRepMesh_ShapeTool::AddInFace(myDFace->GetFace(), aTriangulation);
 }
 

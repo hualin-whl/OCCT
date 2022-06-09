@@ -58,6 +58,16 @@ RWMesh_CafReader::~RWMesh_CafReader()
   //
 }
 
+void RWMesh_CafReader::SetDocument(const Handle(TDocStd_Document)& theDoc)
+{
+  myXdeDoc = theDoc;
+  Standard_Real aScaleFactorM = 1.;
+  if (XCAFDoc_DocumentTool::GetLengthUnit(theDoc, aScaleFactorM))
+  {
+    SetSystemLengthUnit(aScaleFactorM);
+  }
+}
+
 // =======================================================================
 // function : SingleShape
 // purpose  :
@@ -157,6 +167,17 @@ void RWMesh_CafReader::fillDocument()
     || myRootShapes.IsEmpty())
   {
     return;
+  }
+
+  // set units
+  Standard_Real aLengthUnit = 1.;
+  if (!XCAFDoc_DocumentTool::GetLengthUnit(myXdeDoc, aLengthUnit))
+  {
+    XCAFDoc_DocumentTool::SetLengthUnit(myXdeDoc, SystemLengthUnit());
+  }
+  else if (aLengthUnit != SystemLengthUnit())
+  {
+    Message::SendWarning("Warning: Length unit of document not equal to the system length unit");
   }
 
   const Standard_Boolean wasAutoNaming = XCAFDoc_ShapeTool::AutoNaming();
@@ -305,7 +326,7 @@ Standard_Boolean RWMesh_CafReader::addShapeIntoDoc (CafDocumentTools& theTools,
       TopoDS_Compound aCompound;
       BRep_Builder aBuilder;
       aBuilder.MakeCompound (aCompound);
-      aCompound.Location (theShape.Location());
+      aCompound.Location (theShape.Location(), Standard_False);
       aShapeToAdd = aCompound;
     }
   }
@@ -380,6 +401,12 @@ Standard_Boolean RWMesh_CafReader::addShapeIntoDoc (CafDocumentTools& theTools,
         // it is not nice having unnamed Product, so copy name from first Instance (probably the only one)
         hasProductName = true;
         setShapeName (aNewRefLabel, aShapeType, aShapeAttribs.Name, theLabel, theParentName);
+      }
+      else if (aShapeAttribs.Name.IsEmpty()
+           && !aRefShapeAttribs.Name.IsEmpty())
+      {
+        // copy name from Product
+        setShapeName (aNewLabel, aShapeType, aRefShapeAttribs.Name, theLabel, theParentName);
       }
     }
     else

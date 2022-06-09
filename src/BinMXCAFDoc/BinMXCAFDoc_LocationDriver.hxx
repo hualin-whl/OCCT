@@ -19,9 +19,8 @@
 #include <Standard.hxx>
 #include <Standard_Type.hxx>
 
-#include <BinTools_LocationSetPtr.hxx>
+#include <BinMNaming_NamedShapeDriver.hxx>
 #include <BinMDF_ADriver.hxx>
-#include <Standard_Boolean.hxx>
 #include <BinObjMgt_RRelocationTable.hxx>
 #include <BinObjMgt_SRelocationTable.hxx>
 class Message_Messenger;
@@ -53,7 +52,7 @@ public:
   //! Translate transient location to storable
   Standard_EXPORT void Translate (const TopLoc_Location& theLoc, BinObjMgt_Persistent& theTarget, BinObjMgt_SRelocationTable& theMap) const;
   
-    void SetSharedLocations (const BinTools_LocationSetPtr& theLocations);
+  void SetNSDriver (const Handle(BinMNaming_NamedShapeDriver)& theNSDriver) { myNSDriver = theNSDriver; }
 
 
 
@@ -68,15 +67,9 @@ protected:
 private:
 
 
-  BinTools_LocationSetPtr myLocations;
-
+  Handle(BinMNaming_NamedShapeDriver) myNSDriver;
 
 };
-
-
-#include <BinMXCAFDoc_LocationDriver.lxx>
-
-
 
 
 

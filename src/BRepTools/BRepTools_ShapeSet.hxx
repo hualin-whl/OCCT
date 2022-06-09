@@ -26,13 +26,11 @@
 #include <GeomTools_CurveSet.hxx>
 #include <GeomTools_Curve2dSet.hxx>
 #include <TColStd_IndexedMapOfTransient.hxx>
-#include <Standard_Boolean.hxx>
 #include <TopTools_ShapeSet.hxx>
 #include <Standard_OStream.hxx>
 #include <Standard_IStream.hxx>
 #include <TopAbs_ShapeEnum.hxx>
 
-class BRep_Builder;
 class TopoDS_Shape;
 
 

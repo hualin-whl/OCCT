@@ -16,14 +16,11 @@
 #include <Bnd_Box.hxx>
 #include <BndLib_Add3dCurve.hxx>
 #include <BndLib_AddSurface.hxx>
-#include <BRep_Polygon3D.hxx>
 #include <BRep_Tool.hxx>
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepBndLib.hxx>
-#include <Geom_Curve.hxx>
 #include <Geom_Surface.hxx>
-#include <GeomAdaptor_Curve.hxx>
 #include <Poly_Polygon3D.hxx>
 #include <Poly_PolygonOnTriangulation.hxx>
 #include <Poly_Triangulation.hxx>
@@ -306,9 +303,13 @@ void BRepBndLib::AddOptimal(const TopoDS_Shape& S, Bnd_Box& B,
                           Tol);
           }
         }
-        Standard_Real xmin, ymin, zmin, xmax, ymax, zmax;
-        aLocBox.Get(xmin, ymin, zmin, xmax, ymax, zmax);
-        B.Update(xmin, ymin, zmin, xmax, ymax, zmax);
+
+        if (!aLocBox.IsVoid())
+        {
+          Standard_Real xmin, ymin, zmin, xmax, ymax, zmax;
+          aLocBox.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+          B.Update(xmin, ymin, zmin, xmax, ymax, zmax);
+        }
       }
     }
   }
@@ -703,6 +704,16 @@ void AdjustFaceBox(const BRepAdaptor_Surface& BS,
                    Bnd_Box& FaceBox,
                    const Bnd_Box& EdgeBox, const Standard_Real Tol)
 {
+  if (EdgeBox.IsVoid())
+  {
+    return;
+  }
+  if (FaceBox.IsVoid())
+  {
+    FaceBox = EdgeBox;
+    return;
+  }
+
   Standard_Real fxmin, fymin, fzmin, fxmax, fymax, fzmax;
   Standard_Real exmin, eymin, ezmin, exmax, eymax, ezmax;
   //

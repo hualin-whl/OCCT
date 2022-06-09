@@ -21,7 +21,6 @@
 #include <Standard_Type.hxx>
 
 #include <TopoDS_Wire.hxx>
-#include <Standard_Real.hxx>
 #include <GeomFill_HArray1OfLocationLaw.hxx>
 #include <TColStd_HArray1OfReal.hxx>
 #include <TopTools_HArray1OfShape.hxx>
@@ -30,9 +29,6 @@
 #include <Standard_Transient.hxx>
 #include <GeomFill_PipeError.hxx>
 #include <TColStd_Array1OfInteger.hxx>
-#include <Standard_Boolean.hxx>
-class Standard_OutOfRange;
-class TopoDS_Wire;
 class GeomFill_LocationLaw;
 class TopoDS_Edge;
 class TopoDS_Vertex;

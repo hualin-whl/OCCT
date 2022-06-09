@@ -19,9 +19,7 @@
 #include <Standard_DefineAlloc.hxx>
 #include <Standard_Handle.hxx>
 
-#include <NCollection_BaseAllocator.hxx>
 #include <Standard_Integer.hxx>
-#include <Standard_Boolean.hxx>
 #include <BRepBuilderAPI_MakeShape.hxx>
 #include <BOPAlgo_Options.hxx>
 
@@ -53,7 +51,6 @@ public:
   using BOPAlgo_Options::DumpWarnings;
   using BOPAlgo_Options::ClearWarnings;
   using BOPAlgo_Options::GetReport;
-  using BOPAlgo_Options::SetProgressIndicator;
   using BOPAlgo_Options::SetUseOBB;
 
 protected:

@@ -29,11 +29,6 @@
 #include <Standard_Boolean.hxx>
 #include <Standard_OStream.hxx>
 #include <Standard_IStream.hxx>
-class Standard_NullObject;
-class Standard_OutOfRange;
-class Standard_NumericError;
-class Standard_NegativeValue;
-class TCollection_HAsciiString;
 class TCollection_ExtendedString;
 
 //! Class defines a variable-length sequence of 8-bit characters.
@@ -81,16 +76,14 @@ public:
   //! Initializes a AsciiString with another AsciiString.
   Standard_EXPORT TCollection_AsciiString(const TCollection_AsciiString& astring);
 
-#ifndef OCCT_NO_RVALUE_REFERENCE
   //! Move constructor
-  TCollection_AsciiString (TCollection_AsciiString&& theOther)
+  TCollection_AsciiString (TCollection_AsciiString&& theOther) noexcept
   : mystring (theOther.mystring),
     mylength (theOther.mylength)
   {
     theOther.mystring = NULL;
     theOther.mylength = 0;
   }
-#endif
   
   //! Initializes a AsciiString with copy of another AsciiString
   //! concatenated with the message character.
@@ -285,10 +278,8 @@ void operator = (const TCollection_AsciiString& fromwhere)
   //! Exchange the data of two strings (without reallocating memory).
   Standard_EXPORT void Swap (TCollection_AsciiString& theOther);
 
-#ifndef OCCT_NO_RVALUE_REFERENCE
   //! Move assignment operator
-  TCollection_AsciiString& operator= (TCollection_AsciiString&& theOther) { Swap (theOther); return *this; }
-#endif
+  TCollection_AsciiString& operator= (TCollection_AsciiString&& theOther) noexcept { Swap (theOther); return *this; }
 
   //! Frees memory allocated by AsciiString.
   Standard_EXPORT ~TCollection_AsciiString();

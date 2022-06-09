@@ -25,12 +25,9 @@
 #include <TColStd_HArray1OfInteger.hxx>
 #include <TColStd_HArray2OfReal.hxx>
 #include <Standard_Integer.hxx>
-#include <Standard_Boolean.hxx>
 #include <TColStd_Array1OfInteger.hxx>
 #include <TColStd_Array1OfReal.hxx>
 #include <TColStd_Array2OfReal.hxx>
-class Standard_OutOfRange;
-class Standard_ConstructionError;
 
 
 //! Convert a serie of Polynomial N-Dimensional Curves

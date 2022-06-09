@@ -543,8 +543,87 @@ Standard_Boolean SelectMgr_AxisIntersector::OverlapsSphere (const gp_Pnt& theCen
     return Standard_False;
   }
 
+  const gp_Pnt aPntOnSphere (myAxis.Location().XYZ() + myAxis.Direction().XYZ() * aDepth);
+  const gp_Vec aNormal (aPntOnSphere.XYZ() - theCenter.XYZ());
   thePickResult.SetDepth (aDepth);
+  thePickResult.SetPickedPoint (aPntOnSphere);
+  thePickResult.SetSurfaceNormal (aNormal);
   return Standard_True;
+}
+
+//=======================================================================
+// function : OverlapsCylinder
+// purpose  :
+//=======================================================================
+Standard_Boolean SelectMgr_AxisIntersector::OverlapsCylinder (const Standard_Real theBottomRad,
+                                                              const Standard_Real theTopRad,
+                                                              const Standard_Real theHeight,
+                                                              const gp_Trsf& theTrsf,
+                                                              const SelectMgr_ViewClipRange& theClipRange,
+                                                              SelectBasics_PickResult& thePickResult) const
+{
+  Standard_ASSERT_RAISE (mySelectionType == SelectMgr_SelectionType_Point,
+    "Error! SelectMgr_AxisIntersector::Overlaps() should be called after selection axis initialization");
+  Standard_Real aTimeEnter = 0.0, aTimeLeave = 0.0;
+  gp_Trsf aTrsfInv = theTrsf.Inverted();
+  gp_Pnt  aLoc     = myAxis.Location() .Transformed (aTrsfInv);
+  gp_Dir  aRayDir  = myAxis.Direction().Transformed (aTrsfInv);
+  if (!RayCylinderIntersection (theBottomRad, theTopRad, theHeight, aLoc, aRayDir, aTimeEnter, aTimeLeave))
+  {
+    return false;
+  }
+
+  Standard_Real aDepth = 0.0;
+  Bnd_Range aRange (Max (aTimeEnter, 0.0), aTimeLeave);
+  aRange.GetMin (aDepth);
+  if (!theClipRange.GetNearestDepth (aRange, aDepth))
+  {
+    return false;
+  }
+
+  const gp_Pnt aPntOnCylinder = aLoc.XYZ() + aRayDir.XYZ() * aDepth;
+  thePickResult.SetDepth (aDepth);
+  thePickResult.SetPickedPoint (aPntOnCylinder.Transformed (theTrsf));
+  if (Abs (aPntOnCylinder.Z()) < Precision::Confusion())
+  {
+    thePickResult.SetSurfaceNormal (-gp::DZ().Transformed (theTrsf));
+  }
+  else if (Abs (aPntOnCylinder.Z() - theHeight) < Precision::Confusion())
+  {
+    thePickResult.SetSurfaceNormal (gp::DZ().Transformed (theTrsf));
+  }
+  else
+  {
+    thePickResult.SetSurfaceNormal (gp_Vec (aPntOnCylinder.X(), aPntOnCylinder.Y(), 0.0).Transformed (theTrsf));
+  }
+  return true;
+}
+
+//=======================================================================
+// function : OverlapsCylinder
+// purpose  :
+//=======================================================================
+Standard_Boolean SelectMgr_AxisIntersector::OverlapsCylinder (const Standard_Real theBottomRad,
+                                                              const Standard_Real theTopRad,
+                                                              const Standard_Real theHeight,
+                                                              const gp_Trsf& theTrsf,
+                                                              Standard_Boolean* theInside)  const
+{
+  Standard_ASSERT_RAISE (mySelectionType == SelectMgr_SelectionType_Point,
+    "Error! SelectMgr_AxisIntersector::Overlaps() should be called after selection axis initialization");
+  Standard_Real aTimeEnter = 0.0, aTimeLeave = 0.0;
+  gp_Trsf aTrsfInv = theTrsf.Inverted();
+  gp_Pnt  aLoc     = myAxis.Location() .Transformed (aTrsfInv);
+  gp_Dir  aRayDir  = myAxis.Direction().Transformed (aTrsfInv);
+  if (!RayCylinderIntersection (theBottomRad, theTopRad, theHeight, aLoc, aRayDir, aTimeEnter, aTimeLeave))
+  {
+    return false;
+  }
+  if (theInside != NULL)
+  {
+    *theInside &= (aTimeEnter >= 0.0);
+  }
+  return true;
 }
 
 //=======================================================================

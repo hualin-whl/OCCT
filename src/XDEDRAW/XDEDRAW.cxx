@@ -13,6 +13,7 @@
 // Alternatively, this file may be used under the terms of Open CASCADE
 // commercial license or contractual agreement.
 
+#include <XSDRAW.hxx>
 
 #include <AIS_InteractiveContext.hxx>
 #include <AIS_InteractiveObject.hxx>
@@ -41,6 +42,7 @@
 #include <TDataStd_Comment.hxx>
 #include <TDataStd_Integer.hxx>
 #include <TDataStd_IntegerArray.hxx>
+#include <XCAFDoc_LengthUnit.hxx>
 #include <TDataStd_Name.hxx>
 #include <TDataStd_Real.hxx>
 #include <TDataStd_RealArray.hxx>
@@ -55,6 +57,7 @@
 #include <TDocStd_Application.hxx>
 #include <TDocStd_Document.hxx>
 #include <TDocStd_Owner.hxx>
+#include <PCDM_ReaderFilter.hxx>
 #include <TNaming_NamedShape.hxx>
 #include <TopoDS_Shape.hxx>
 #include <TPrsStd_AISPresentation.hxx>
@@ -92,9 +95,9 @@
 #include <XDEDRAW_GDTs.hxx>
 #include <XDEDRAW_Views.hxx>
 #include <XDEDRAW_Notes.hxx>
-#include <XSDRAW.hxx>
 #include <XSDRAWIGES.hxx>
 #include <XSDRAWSTEP.hxx>
+#include <UnitsMethods.hxx>
 
 #include <BinXCAFDrivers.hxx>
 #include <XmlXCAFDrivers.hxx>
@@ -191,6 +194,9 @@ static Standard_Integer saveDoc (Draw_Interpretor& di, Standard_Integer argc, co
     case PCDM_SS_UserBreak:
       di << "Storage error: user break\n";
       break;
+    case PCDM_SS_UnrecognizedFormat:
+      di << "Storage error: unrecognized document storage format " << D->StorageFormat() << "\n";
+      break;
   }
 
   return 0;
@@ -206,31 +212,65 @@ static Standard_Integer openDoc (Draw_Interpretor& di, Standard_Integer argc, co
   Handle(DDocStd_DrawDocument) DD;
   Handle(TDocStd_Application) A = DDocStd::GetApplication();
 
-  if ( argc != 3 )
+  if ( argc < 3 )
   {
-    di << "invalid number of arguments. Usage:\t XOpen filename docname\n";
+    di << "invalid number of arguments. Usage:\t XOpen filename docname [-skipAttribute] [-readAttribute] [-readPath] [-append|-overwrite]\n";
     return 1;
   }
 
   TCollection_AsciiString Filename = argv[1];
   Standard_CString DocName = argv[2];
 
-  if ( DDocStd::GetDocument(DocName, D, Standard_False) )
+  Handle(PCDM_ReaderFilter) aFilter = new PCDM_ReaderFilter;
+  for (Standard_Integer i = 3; i < argc; i++)
   {
-    di << "document with name " << DocName << " already exists\n";
+    TCollection_AsciiString anArg(argv[i]);
+    if (anArg == "-append")
+    {
+      aFilter->Mode() = PCDM_ReaderFilter::AppendMode_Protect;
+    }
+    else if (anArg == "-overwrite")
+    {
+      aFilter->Mode() = PCDM_ReaderFilter::AppendMode_Overwrite;
+    }
+    else if (anArg.StartsWith("-skip"))
+    {
+      TCollection_AsciiString anAttrType = anArg.SubString(6, anArg.Length());
+      aFilter->AddSkipped(anAttrType);
+    }
+    else if (anArg.StartsWith("-read"))
+    {
+      TCollection_AsciiString aValue = anArg.SubString(6, anArg.Length());
+      if (aValue.Value(1) == '0') // path
+      {
+        aFilter->AddPath(aValue);
+      }
+      else // attribute to read
+      {
+        aFilter->AddRead(aValue);
+      }
+    }
+  }
+
+  if (aFilter->IsAppendMode() && !DDocStd::GetDocument (DocName, D, Standard_False))
+  {
+    di << "for append mode document " << DocName << " must be already created\n";
     return 1;
   }
 
   Handle(Draw_ProgressIndicator) aProgress = new Draw_ProgressIndicator (di);
-  if ( A->Open(Filename, D, aProgress->Start()) != PCDM_RS_OK )
+  if ( A->Open (Filename, D, aFilter, aProgress->Start()) != PCDM_RS_OK )
   {
     di << "cannot open XDE document\n";
     return 1;
   }
 
-  DD = new DDocStd_DrawDocument(D);
-  TDataStd_Name::Set(D->GetData()->Root(), DocName);
-  Draw::Set(DocName, DD);
+  if (!aFilter->IsAppendMode())
+  {
+    DD = new DDocStd_DrawDocument (D);
+    TDataStd_Name::Set (D->GetData()->Root(), DocName);
+    Draw::Set (DocName, DD);
+  }
 
   di << "document " << DocName << " opened\n";
 
@@ -545,7 +585,7 @@ static Standard_Integer show (Draw_Interpretor& di, Standard_Integer argc, const
   TCollection_AsciiString   aViewName = TCollection_AsciiString ("Driver1/Document_") + argv[1] + "/View1";
   if (!TPrsStd_AISViewer::Find (aRoot, aDocViewer))
   {
-    ViewerTest::ViewerInit (0, 0, 0, 0, aViewName.ToCString(), "");
+    ViewerTest::ViewerInit (aViewName);
     aDocViewer = TPrsStd_AISViewer::New (aRoot, ViewerTest::GetAISContext());
   }
 
@@ -604,12 +644,14 @@ private:
   XDEDRAW_XDisplayTool()
   : myDispMode(-2),
     myHiMode  (-2),
+    myIsAutoTriang (-1),
     myToPrefixDocName (Standard_True),
     myToGetNames (Standard_True),
     myToExplore  (Standard_False) {}
 
   //! Display single label.
-  Standard_Integer displayLabel (const TDF_Label& theLabel,
+  Standard_Integer displayLabel (Draw_Interpretor& theDI,
+                                 const TDF_Label& theLabel,
                                  const TCollection_AsciiString& theNamePrefix,
                                  const TopLoc_Location& theLoc,
                                  TCollection_AsciiString& theOutDispList)
@@ -661,7 +703,7 @@ private:
         const TopLoc_Location aLoc = theLoc * XCAFDoc_ShapeTool::GetLocation (theLabel);
         for (TDF_ChildIterator aChildIter (aRefLabel); aChildIter.More(); aChildIter.Next())
         {
-          if (displayLabel (aChildIter.Value(), aName, aLoc, theOutDispList) == 1)
+          if (displayLabel (theDI, aChildIter.Value(), aName, aLoc, theOutDispList) == 1)
           {
             return 1;
           }
@@ -683,7 +725,7 @@ private:
       }
       if (!aPrs->AcceptDisplayMode (myDispMode))
       {
-        std::cout << "Syntax error: " << aPrs->DynamicType()->Name() << " rejects " << myDispMode << " display mode\n";
+        theDI << "Syntax error: " << aPrs->DynamicType()->Name() << " rejects " << myDispMode << " display mode";
         return 1;
       }
       else
@@ -696,10 +738,14 @@ private:
       if (myHiMode != -1
       && !aPrs->AcceptDisplayMode (myHiMode))
       {
-        std::cout << "Syntax error: " << aPrs->DynamicType()->Name() << " rejects " << myHiMode << " display mode\n";
+        theDI << "Syntax error: " << aPrs->DynamicType()->Name() << " rejects " << myHiMode << " display mode";
         return 1;
       }
       aPrs->SetHilightMode (myHiMode);
+    }
+    if (myIsAutoTriang != -1)
+    {
+      aPrs->Attributes()->SetAutoTriangulation (myIsAutoTriang == 1);
     }
 
     ViewerTest::Display (aName, aPrs, false);
@@ -715,7 +761,7 @@ private:
     Handle(AIS_InteractiveContext) aContext = ViewerTest::GetAISContext();
     if (aContext.IsNull())
     {
-      std::cout << "Error: no active view!\n";
+      theDI << "Error: no active viewer";
       return 1;
     }
 
@@ -744,6 +790,17 @@ private:
             && TCollection_AsciiString (theArgVec[anArgIter + 1]).IsIntegerValue())
       {
         myHiMode = TCollection_AsciiString (theArgVec[++anArgIter]).IntegerValue();
+      }
+      else if (anArgCase == "-autotr"
+            || anArgCase == "-autotrian"
+            || anArgCase == "-autotriang"
+            || anArgCase == "-autotriangulation"
+            || anArgCase == "-noautotr"
+            || anArgCase == "-noautotrian"
+            || anArgCase == "-noautotriang"
+            || anArgCase == "-noautotriangulation")
+      {
+        myIsAutoTriang = Draw::ParseOnOffNoIterator (theNbArgs, theArgVec, anArgIter) ? 1 : 0;
       }
       else if (anArgCase == "-docprefix"
             || anArgCase == "-nodocprefix")
@@ -817,7 +874,7 @@ private:
             if (!myDoc.IsNull()
               && myDoc != aDoc)
             {
-              std::cout << "Syntax error at '" << theArgVec[anArgIter] << "'\n";
+              theDI << "Syntax error at '" << theArgVec[anArgIter] << "'";
               return 1;
             }
             myDoc = aDoc;
@@ -826,7 +883,7 @@ private:
         }
         if (myDoc.IsNull())
         {
-          std::cout << "Syntax error at '" << theArgVec[anArgIter] << "'\n";
+          theDI << "Syntax error at '" << theArgVec[anArgIter] << "'";
           return 1;
         }
 
@@ -835,7 +892,7 @@ private:
         if (aLabel.IsNull()
         || !XCAFDoc_ShapeTool::IsShape (aLabel))
         {
-          std::cout << "Syntax error: " << aValue << " is not a valid shape label\n";
+          theDI << "Syntax error: " << aValue << " is not a valid shape label";
           return 1;
         }
         myLabels.Append (aLabel);
@@ -843,7 +900,7 @@ private:
     }
     if (myDoc.IsNull())
     {
-      std::cout << "Syntax error: not enough arguments\n";
+      theDI << "Syntax error: not enough arguments";
       return 1;
     }
     if (myLabels.IsEmpty())
@@ -854,7 +911,7 @@ private:
     for (TDF_LabelSequence::Iterator aLabIter (myLabels); aLabIter.More(); aLabIter.Next())
     {
       const TDF_Label& aLabel = aLabIter.Value();
-      if (displayLabel (aLabel, myToPrefixDocName ? myDocName + ":" : "", TopLoc_Location(), myOutDispList) == 1)
+      if (displayLabel (theDI, aLabel, myToPrefixDocName ? myDocName + ":" : "", TopLoc_Location(), myOutDispList) == 1)
       {
         return 1;
       }
@@ -880,6 +937,7 @@ private:
   TDF_LabelSequence        myLabels;          //!< labels to display
   Standard_Integer         myDispMode;        //!< shape display mode
   Standard_Integer         myHiMode;          //!< shape highlight mode
+  Standard_Integer         myIsAutoTriang;    //!< auto-triangulation mode
   Standard_Boolean         myToPrefixDocName; //!< flag to prefix objects with document name
   Standard_Boolean         myToGetNames;      //!< flag to use label names or tags
   Standard_Boolean         myToExplore;       //!< flag to explore assembles
@@ -1025,6 +1083,93 @@ static Standard_Integer XSetTransparency (Draw_Interpretor& di, Standard_Integer
     prs->SetTransparency( aTransparency );
   }
   TPrsStd_AISViewer::Update(Doc->GetData()->Root());
+  return 0;
+}
+
+//=======================================================================
+//function : setLengthUnit
+//purpose  :
+//=======================================================================
+static Standard_Integer setLengthUnit(Draw_Interpretor& di,
+                                      Standard_Integer argc,
+                                      const char** argv)
+{
+  if (argc != 3)
+  {
+    di << "Use: " << argv[0] << " Doc {unitName|scaleFactor} \n";
+    return 1;
+  }
+
+  Handle(TDocStd_Document) aDoc;
+  DDocStd::GetDocument(argv[1], aDoc);
+  if (aDoc.IsNull())
+  {
+    di << "Error: " << argv[1] << " is not a document\n"; return 1;
+  }
+
+  TCollection_AsciiString anUnit(argv[2]);
+  Standard_Real anUnitValue = 1.;
+  TCollection_AsciiString anUnitName;
+  if (!anUnit.IsRealValue(true))
+  {
+    UnitsMethods_LengthUnit aTypeUnit = UnitsMethods::LengthUnitFromString(anUnit.ToCString(), Standard_False);
+    if (aTypeUnit == UnitsMethods_LengthUnit_Undefined)
+    {
+      di << "Error: " << anUnit
+         << " is incorrect unit, use m, mm, km, cm, micron, mille, in, min, nin, ft, stat.mile\n";
+      return 1;
+    }
+    anUnitName = anUnit;
+    anUnitValue = UnitsMethods::GetLengthFactorValue(aTypeUnit) * 0.001;
+  }
+  else
+  {
+    anUnitValue = anUnit.RealValue();
+    anUnitName = UnitsMethods::DumpLengthUnit(anUnitValue, UnitsMethods_LengthUnit_Meter);
+  }
+  XCAFDoc_LengthUnit::Set(aDoc->Main().Root(), anUnitName, anUnitValue);
+  return 0;
+}
+
+//=======================================================================
+//function : dumpLengthUnit
+//purpose  :
+//=======================================================================
+static Standard_Integer dumpLengthUnit(Draw_Interpretor& di, Standard_Integer argc, const char** argv)
+{
+  if (argc != 2 && argc != 3) {
+    di << "Use: " << argv[0] << " Doc [-scale]\n";
+    return 1;
+  }
+
+  Handle(TDocStd_Document) aDoc;
+  DDocStd::GetDocument(argv[1], aDoc);
+  if (aDoc.IsNull()) 
+  { 
+    di << "Error: " << argv[1] << " is not a document\n"; return 1;
+  }
+  Handle(XCAFDoc_LengthUnit) aUnits;
+  if (!aDoc->Main().Root().FindAttribute(XCAFDoc_LengthUnit::GetID(), aUnits))
+  {
+    di << "Error: Document doesn't contain a Length Unit\n";
+    return 1;
+  }
+  if (argc == 3)
+  {
+    TCollection_AsciiString anOption(argv[2]);
+    anOption.LowerCase();
+    if (anOption.IsEqual("-scale"))
+    {
+      di << aUnits->GetUnitValue();
+      return 0;
+    }
+    else
+    {
+      di << "Error: Incorrect option, use -scale\n";
+      return 1;
+    }
+  }
+  di << aUnits->GetUnitName();
   return 0;
 }
 
@@ -1177,7 +1322,7 @@ static Standard_Integer testDoc (Draw_Interpretor&,
   aD1->Open(anApp);
   
   TCollection_AsciiString  aViewName ("Driver1/DummyDocument/View1");
-  ViewerTest::ViewerInit (0, 0, 0, 0, aViewName.ToCString(), "");
+  ViewerTest::ViewerInit (aViewName);
   TPrsStd_AISViewer::New (aD1->GetData()->Root(), ViewerTest::GetAISContext());
 
   // get shape tool for shape verification
@@ -1245,8 +1390,13 @@ void XDEDRAW::Init(Draw_Interpretor& di)
   di.Add ("XSave","[Doc Path] \t: Save Doc or first document in session",
 		   __FILE__, saveDoc, g);
 
-  di.Add ("XOpen","Path Doc \t: Open XDE Document with name Doc from Path",
-          __FILE__, openDoc, g);
+  di.Add ("XOpen","Path Doc [-skipAttribute] [-readAttribute] [-readPath] [-append|-overwrite]\t: Open XDE Document with name Doc from Path"
+          "\n\t\t The options are:"
+          "\n\t\t   -skipAttribute : class name of the attribute to skip during open, for example -skipTDF_Reference"
+          "\n\t\t   -readAttribute : class name of the attribute to read only during open, for example -readTDataStd_Name loads only such attributes"
+          "\n\t\t   -append : to read file into already existing document once again, append new attributes and don't touch existing"
+          "\n\t\t   -overwrite : to read file into already existing document once again, overwriting existing attributes",
+    __FILE__, openDoc, g);
 
   di.Add ("Xdump","Doc [int deep (0/1)] \t: Print information about tree's structure",
 		   __FILE__, dump, g);
@@ -1262,7 +1412,7 @@ void XDEDRAW::Init(Draw_Interpretor& di)
 
   di.Add ("XDisplay",
           "XDisplay Doc [label1 [label2 [...]]] [-explore {on|off}] [-docPrefix {on|off}] [-names {on|off}]"
-          "\n\t\t:      [-noupdate] [-dispMode Mode] [-highMode Mode]"
+          "\n\t\t:      [-noupdate] [-dispMode Mode] [-highMode Mode] [-autoTriangulation {0|1}]"
           "\n\t\t: Displays document (parts) in 3D Viewer."
           "\n\t\t:  -dispMode    Presentation display mode."
           "\n\t\t:  -highMode    Presentation highlight mode."
@@ -1270,7 +1420,8 @@ void XDEDRAW::Init(Draw_Interpretor& di)
           "\n\t\t:  -names       Use object names instead of label tag; TRUE by default."
           "\n\t\t:  -explore     Explode labels to leaves; FALSE by default."
           "\n\t\t:  -outDispList Set the TCL variable to the list of displayed object names."
-          "\n\t\t:               (instead of printing them to draw interpreter)",
+          "\n\t\t:               (instead of printing them to draw interpreter)"
+          "\n\t\t:  -autoTriang  Enable/disable auto-triangulation for displayed shapes.",
           __FILE__, XDEDRAW_XDisplayTool::XDisplay, g);
 
   di.Add ("XWdump","Doc filename.{gif|xwd|bmp} \t: Dump contents of viewer window to XWD, GIF or BMP file",
@@ -1288,7 +1439,18 @@ void XDEDRAW::Init(Draw_Interpretor& di)
   di.Add ("XSetTransparency", "Doc Transparency [label1 label2 ...]\t: Set transparency for given label(s) or whole doc",
 		   __FILE__, XSetTransparency, g);
 
-  di.Add ("XShowFaceBoundary", 
+  di.Add("XSetLengthUnit",
+    "Doc {unit_name|scale_factor}\t: Set value of length unit"
+    "\n\t\t: Possible unit_name: m, mm, km, cm, micron, mille, in(inch), min(microinch), nin(nano inch), ft, stat.mile"
+    "\n\t\t: Possible scale factor: any real value more then 0. Factor to meter.",
+    __FILE__, setLengthUnit, g);
+
+  di.Add("XGetLengthUnit",
+    "Doc [-scale]\t: Print name of length unit"
+    "\n\t\t: -scale : print value of the scaling factor to meter of length unit",
+    __FILE__, dumpLengthUnit, g);
+
+  di.Add ("XShowFaceBoundary",
           "Doc Label IsOn [R G B [LineWidth [LineStyle]]]:"
           "- turns on/off drawing of face boundaries and defines boundary line style",
           __FILE__, XShowFaceBoundary, g);

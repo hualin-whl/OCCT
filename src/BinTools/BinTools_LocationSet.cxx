@@ -16,11 +16,8 @@
 
 #include <BinTools.hxx>
 #include <BinTools_LocationSet.hxx>
-#include <gp_Ax3.hxx>
 #include <gp_Vec.hxx>
-#include <Precision.hxx>
 #include <Standard_ErrorHandler.hxx>
-#include <Standard_OutOfRange.hxx>
 #include <TopLoc_Location.hxx>
 
 //=======================================================================
@@ -57,7 +54,7 @@ static Standard_IStream& operator >>(Standard_IStream& IS, gp_Trsf& T)
 //function : operator << (gp_Trsf& T)
 //purpose  : 
 //=======================================================================
-static Standard_OStream& operator <<(Standard_OStream& OS,const gp_Trsf& T)
+Standard_OStream& operator <<(Standard_OStream& OS,const gp_Trsf& T)
 {
   gp_XYZ V = T.TranslationPart();
   gp_Mat M = T.VectorialPart();

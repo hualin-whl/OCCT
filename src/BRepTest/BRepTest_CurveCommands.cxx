@@ -17,13 +17,8 @@
 #include <BRepTest.hxx>
 #include <GeometryTest.hxx>
 #include <gp_Pnt2d.hxx>
-#include <gp_Pln.hxx>
-#include <gp_Ax2.hxx>
 #include <gp_Vec.hxx>
 #include <gp_Vec2d.hxx>
-#include <TColgp_HArray1OfPnt2d.hxx>
-#include <TColgp_Array1OfPnt2d.hxx>
-#include <BRepBuilderAPI.hxx>
 #include <BRepBuilderAPI_MakeVertex.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeEdge2d.hxx>
@@ -56,7 +51,6 @@
 #include <Draw_Interpretor.hxx>
 #include <Draw_Appli.hxx>
 #include <DrawTrSurf.hxx>
-#include <DrawTrSurf_BSplineCurve2d.hxx>
 #include <DrawTrSurf_Point.hxx>
 
 #include <gp.hxx>
@@ -1915,11 +1909,11 @@ void  BRepTest::CurveCommands(Draw_Interpretor& theCommands)
 
   theCommands.Add("mkoffset",
     "mkoffset result face/compound of wires  nboffset stepoffset [jointype(a/i) [alt]]",__FILE__,
-    mkoffset);
+    mkoffset,g);
 
   theCommands.Add("openoffset",
     "openoffset result face/wire nboffset stepoffset [jointype(a/i)]",__FILE__,
-    openoffset);
+    openoffset,g);
 
   theCommands.Add("mkedge",
     "mkedge edge curve [surface] [pfirst plast] [vfirst [pfirst] vlast [plast]] ",__FILE__,
@@ -1967,11 +1961,11 @@ void  BRepTest::CurveCommands(Draw_Interpretor& theCommands)
     edgeintersector,g);
 
   theCommands.Add("build3d",
-    "build3d S [tol]",
+    "build3d S [tol]",__FILE__,
     build3d, g);
 
   theCommands.Add("reducepcurves",
-    "reducepcurves shape1 shape2 ...",
+    "reducepcurves shape1 shape2 ...",__FILE__,
     reducepcurves, g);
 
   theCommands.Add("concatC0wire",

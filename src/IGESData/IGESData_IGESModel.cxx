@@ -16,12 +16,9 @@
 //#13 smh 13.01.2000 : Parsing long year date
 
 #include <IGESData_BasicEditor.hxx>
-#include <IGESData_GlobalSection.hxx>
 #include <IGESData_IGESEntity.hxx>
 #include <IGESData_IGESModel.hxx>
-#include <IGESData_Protocol.hxx>
 #include <Interface_Check.hxx>
-#include <Interface_InterfaceError.hxx>
 #include <Interface_InterfaceModel.hxx>
 #include <Interface_Macros.hxx>
 #include <Interface_Static.hxx>
@@ -229,17 +226,6 @@ void   IGESData_IGESModel::AddStartLine
     thestart->Append (new TCollection_HAsciiString(line));
   else thestart->InsertBefore (atnum,new TCollection_HAsciiString(line));
 }
-
-
-
-//=======================================================================
-//function : GlobalSection
-//purpose  : 
-//=======================================================================
-
-const IGESData_GlobalSection& IGESData_IGESModel::GlobalSection () const
-      {  return theheader;  }
-
 
 //=======================================================================
 //function : SetGlobalSection

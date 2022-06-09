@@ -32,7 +32,6 @@
 #include <Geom2d_Curve.hxx>
 #include <Geom2d_Line.hxx>
 #include <Geom_BezierCurve.hxx>
-#include <Geom_BSplineCurve.hxx>
 #include <Geom_Circle.hxx>
 #include <Geom_Curve.hxx>
 #include <Geom_Line.hxx>
@@ -57,8 +56,6 @@
 #include <TopoDS_Shape.hxx>
 #include <TopTools_Array1OfShape.hxx>
 #include <TopTools_IndexedDataMapOfShapeListOfShape.hxx>
-#include <TopTools_ListIteratorOfListOfShape.hxx>
-#include <TopTools_MapIteratorOfMapOfShape.hxx>
 #include <TopTools_SequenceOfShape.hxx>
 
 static Standard_Boolean IsLinear(const TopoDS_Edge& anEdge,
@@ -332,7 +329,7 @@ BRepOffsetAPI_MiddlePath::BRepOffsetAPI_MiddlePath(const TopoDS_Shape& aShape,
 //purpose  : 
 //=======================================================================
 
-void BRepOffsetAPI_MiddlePath::Build()
+void BRepOffsetAPI_MiddlePath::Build(const Message_ProgressRange& /*theRange*/)
 {
   TopTools_ListIteratorOfListOfShape itl;
   

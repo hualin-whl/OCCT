@@ -24,7 +24,6 @@
 #include <Extrema_ExtPElS.hxx>
 #include <Extrema_GenExtPS.hxx>
 #include <Extrema_SequenceOfPOnSurf.hxx>
-#include <Standard_Real.hxx>
 #include <gp_Pnt.hxx>
 #include <TColStd_SequenceOfReal.hxx>
 #include <GeomAbs_SurfaceType.hxx>
@@ -33,10 +32,6 @@
 #include <Standard_Integer.hxx>
 class Extrema_ExtPExtS;
 class Extrema_ExtPRevS;
-class StdFail_NotDone;
-class Standard_OutOfRange;
-class Standard_TypeMismatch;
-class gp_Pnt;
 class Adaptor3d_Surface;
 class Extrema_POnSurf;
 

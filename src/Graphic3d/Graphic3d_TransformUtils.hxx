@@ -17,7 +17,6 @@
 
 #include <gp_Trsf.hxx>
 #include <Graphic3d_Vec.hxx>
-#include <Standard_math.hxx> // M_PI
 
 //! Helper class that implements transformation matrix functionality.
 namespace Graphic3d_TransformUtils
@@ -121,7 +120,12 @@ namespace Graphic3d_TransformUtils
 
   //! Returns scaling factor from 3x3 affine matrix.
   template<class T>
-  static Standard_Real ScaleFactor (const typename MatrixType<T>::Mat4& theMatrix);
+  static Standard_Real ScaleFactor (const NCollection_Mat4<T>& theMatrix)
+  {
+    // The determinant of the matrix should give the scale factor (cubed).
+    const T aDeterminant = theMatrix.DeterminantMat3();
+    return Pow (static_cast<Standard_Real> (aDeterminant), 1.0 / 3.0);
+  }
 }
 
 // =======================================================================
@@ -484,24 +488,6 @@ static Standard_Boolean Graphic3d_TransformUtils::UnProject (const T            
   theObjZ = anOut.z();
 
   return Standard_True;
-}
-
-// =======================================================================
-// function : ScaleFactor
-// purpose  :
-// =======================================================================
-template<class T>
-static Standard_Real Graphic3d_TransformUtils::ScaleFactor (const typename MatrixType<T>::Mat4& theMatrix)
-{
-  // The determinant of the matrix should give the scale factor (cubed).
-  const T aDeterminant = (theMatrix.GetValue (0, 0) * theMatrix.GetValue (1, 1) * theMatrix.GetValue (2, 2) +
-                          theMatrix.GetValue (0, 1) * theMatrix.GetValue (1, 2) * theMatrix.GetValue (2, 0) +
-                          theMatrix.GetValue (0, 2) * theMatrix.GetValue (1, 0) * theMatrix.GetValue (2, 1))
-                       - (theMatrix.GetValue (0, 2) * theMatrix.GetValue (1, 1) * theMatrix.GetValue (2, 0) +
-                          theMatrix.GetValue (0, 0) * theMatrix.GetValue (1, 2) * theMatrix.GetValue (2, 1) +
-                          theMatrix.GetValue (0, 1) * theMatrix.GetValue (1, 0) * theMatrix.GetValue (2, 2));
-
-  return Pow (static_cast<Standard_Real> (aDeterminant), 1.0 / 3.0);
 }
 
 #endif // _Graphic3d_TransformUtils_HeaderFile

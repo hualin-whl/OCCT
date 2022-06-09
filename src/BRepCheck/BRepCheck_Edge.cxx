@@ -18,13 +18,8 @@
 #include <Adaptor3d_CurveOnSurface.hxx>
 #include <Adaptor3d_Curve.hxx>
 #include <Adaptor3d_CurveOnSurface.hxx>
-#include <Bnd_Box.hxx>
-#include <BRep_CurveOnSurface.hxx>
-#include <BRep_CurveRepresentation.hxx>
 #include <BRep_GCurve.hxx>
 #include <BRepLib_ValidateEdge.hxx>
-#include <BRep_ListIteratorOfListOfCurveRepresentation.hxx>
-#include <BRep_ListOfCurveRepresentation.hxx>
 #include <BRep_PolygonOnTriangulation.hxx>
 #include <BRep_TEdge.hxx>
 #include <BRep_TFace.hxx>
@@ -32,7 +27,6 @@
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepCheck.hxx>
 #include <BRepCheck_Edge.hxx>
-#include <BRepCheck_ListIteratorOfListOfStatus.hxx>
 #include <BRepCheck_ListOfStatus.hxx>
 #include <Extrema_LocateExtPC.hxx>
 #include <Geom2d_Curve.hxx>
@@ -44,7 +38,6 @@
 #include <Geom_Surface.hxx>
 #include <Geom_TrimmedCurve.hxx>
 #include <Geom2d_TrimmedCurve.hxx>
-#include <GeomAdaptor_Curve.hxx>
 #include <GeomAdaptor_Curve.hxx>
 #include <GeomAdaptor_Surface.hxx>
 #include <GeomProjLib.hxx>
@@ -75,20 +68,19 @@ BRepCheck_Edge::BRepCheck_Edge(const TopoDS_Edge& E)
 {
   Init(E);
   myGctrl = Standard_True;
+  myIsExactMethod = Standard_False;
 }
 
 //=======================================================================
 //function : Minimum
-//purpose  : 
+//purpose  :
 //=======================================================================
-
 void BRepCheck_Edge::Minimum()
 {
-
-  if (!myMin) {
-    BRepCheck_ListOfStatus thelist;
-    myMap.Bind(myShape, thelist);
-    BRepCheck_ListOfStatus& lst = myMap(myShape);
+  if (!myMin)
+  {
+    Handle(BRepCheck_HListOfStatus) aNewList = new BRepCheck_HListOfStatus();
+    BRepCheck_ListOfStatus& lst = **myMap.Bound(myShape, aNewList);
     myCref.Nullify();
 
     // Existence et unicite d`une representation 3D
@@ -253,24 +245,30 @@ void BRepCheck_Edge::Minimum()
 
 //=======================================================================
 //function : InContext
-//purpose  : 
+//purpose  :
 //=======================================================================
-
 void BRepCheck_Edge::InContext(const TopoDS_Shape& S)
 {
-  if (myMap.IsBound(S)) {
-    return;
+  Handle(BRepCheck_HListOfStatus) aHList;
+  {
+    Standard_Mutex::Sentry aLock(myMutex.get());
+    if (myMap.IsBound(S))
+    {
+      return;
+    }
+
+    Handle(BRepCheck_HListOfStatus) aNewList = new BRepCheck_HListOfStatus();
+    aHList = *myMap.Bound (S, aNewList);
   }
-  BRepCheck_ListOfStatus thelist;
-  myMap.Bind(S, thelist);
-  BRepCheck_ListOfStatus& lst = myMap(S);
+
+  BRepCheck_ListOfStatus& lst = *aHList;
 
   Handle(BRep_TEdge)& TE = *((Handle(BRep_TEdge)*)&myShape.TShape());
   Standard_Real Tol = BRep_Tool::Tolerance(TopoDS::Edge(myShape));
 
   TopAbs_ShapeEnum styp = S.ShapeType();
   //  for (TopExp_Explorer exp(S,TopAbs_EDGE); exp.More(); exp.Next()) {
-  TopExp_Explorer exp(S,TopAbs_EDGE) ;
+  TopExp_Explorer exp (S, TopAbs_EDGE);
   for ( ; exp.More(); exp.Next()) {
     if (exp.Current().IsSame(myShape)) {
       break;
@@ -317,11 +315,12 @@ void BRepCheck_Edge::InContext(const TopoDS_Shape& S)
 
       BRep_ListIteratorOfListOfCurveRepresentation itcr(TE->Curves());
       Standard_Real eps = Precision::PConfusion();
+      Standard_Boolean toRunParallel = !myMutex.IsNull();
       while (itcr.More()) {
         const Handle(BRep_CurveRepresentation)& cr = itcr.Value();
         if (cr != myCref && cr->IsCurveOnSurface(Su,L)) {
           pcurvefound = Standard_True;
-          Handle(BRep_GCurve) GC (Handle(BRep_GCurve)::DownCast (cr));
+          Handle(BRep_GCurve) GC (Handle(BRep_GCurve)::DownCast(cr));
           Standard_Real f,l;
           GC->Range(f,l);
           Standard_Real ff = f, ll = l;
@@ -349,7 +348,7 @@ void BRepCheck_Edge::InContext(const TopoDS_Shape& S)
           Standard_Real fp = pc->FirstParameter(), lp = pc->LastParameter();
           if (pc->DynamicType() == STANDARD_TYPE(Geom2d_TrimmedCurve))
           {
-            const Handle(Geom2d_Curve)& aC = Handle(Geom2d_TrimmedCurve)::DownCast (pc)->BasisCurve(); 
+            const Handle(Geom2d_Curve) aC = Handle(Geom2d_TrimmedCurve)::DownCast (pc)->BasisCurve();
             fp = aC->FirstParameter();
             lp = aC->LastParameter();
             IsPeriodic = aC->IsPeriodic();
@@ -381,6 +380,8 @@ void BRepCheck_Edge::InContext(const TopoDS_Shape& S)
 
             BRepLib_ValidateEdge aValidateEdge(myHCurve, ACS, SameParameter);
             aValidateEdge.SetExitIfToleranceExceeded(Tol);
+            aValidateEdge.SetExactMethod(myIsExactMethod);
+            aValidateEdge.SetParallel(toRunParallel);
             aValidateEdge.Process();
             if (!aValidateEdge.IsDone() || !aValidateEdge.CheckTolerance(Tol))
             {
@@ -403,6 +404,8 @@ void BRepCheck_Edge::InContext(const TopoDS_Shape& S)
 
               BRepLib_ValidateEdge aValidateEdgeOnClosedSurf(myHCurve, ACS, SameParameter);
               aValidateEdgeOnClosedSurf.SetExitIfToleranceExceeded(Tol);
+              aValidateEdgeOnClosedSurf.SetExactMethod(myIsExactMethod);
+              aValidateEdgeOnClosedSurf.SetParallel(toRunParallel);
               aValidateEdgeOnClosedSurf.Process();
               if (!aValidateEdgeOnClosedSurf.IsDone() || !aValidateEdgeOnClosedSurf.CheckTolerance(Tol))
               {
@@ -448,7 +451,7 @@ void BRepCheck_Edge::InContext(const TopoDS_Shape& S)
               GeomProjLib::ProjectOnPlane(new Geom_TrimmedCurve(C3d,First,Last),
               P, P->Position().Direction(),
               Standard_True);
-            Handle(GeomAdaptor_Curve) aHCurve = 
+            Handle(GeomAdaptor_Curve) aHCurve =
               new GeomAdaptor_Curve(ProjOnPlane);
 
             ProjLib_ProjectedCurve proj(GAHS,aHCurve);
@@ -462,6 +465,8 @@ void BRepCheck_Edge::InContext(const TopoDS_Shape& S)
 
             BRepLib_ValidateEdge aValidateEdgeProj(myHCurve, ACS, SameParameter);
             aValidateEdgeProj.SetExitIfToleranceExceeded(Tol);
+            aValidateEdgeProj.SetExactMethod(myIsExactMethod);
+            aValidateEdgeProj.SetParallel(toRunParallel);
             aValidateEdgeProj.Process();
             if (!aValidateEdgeProj.IsDone() || !aValidateEdgeProj.CheckTolerance(Tol))
             {
@@ -483,25 +488,25 @@ void BRepCheck_Edge::InContext(const TopoDS_Shape& S)
         for (exp2.Init(fac,TopAbs_EDGE); exp2.More(); exp2.Next()) {
           if (exp2.Current().IsSame(myShape)) {
             nbconnection++;
-          }
         }
       }
-      if (nbconnection < 2 && !TE->Degenerated()) {
-        BRepCheck::Add(myMap(S),BRepCheck_FreeEdge);
-      }
-      else if (nbconnection > 2) {
-        BRepCheck::Add(myMap(S),BRepCheck_InvalidMultiConnexity);
-      }
-      else {
-        BRepCheck::Add(myMap(S),BRepCheck_NoError);
-      }
     }
-    break;
+    if (nbconnection < 2 && !TE->Degenerated()) {
+      BRepCheck::Add (lst, BRepCheck_FreeEdge);
+    }
+    else if (nbconnection > 2) {
+      BRepCheck::Add (lst, BRepCheck_InvalidMultiConnexity);
+    }
+    else {
+      BRepCheck::Add (lst, BRepCheck_NoError);
+    }
+  }
+  break;
   default:
     break;
   }
-  if (myMap(S).IsEmpty()) {
-    myMap(S).Append(BRepCheck_NoError);
+  if (lst.IsEmpty()) {
+    lst.Append (BRepCheck_NoError);
   }
 }
 
@@ -549,7 +554,8 @@ Standard_Boolean BRepCheck_Edge::GeometricControls() const
 //=======================================================================
 void BRepCheck_Edge::SetStatus(const BRepCheck_Status theStatus)
 {
-  BRepCheck::Add(myMap(myShape),theStatus);
+  Standard_Mutex::Sentry aLock(myMutex.get());
+  BRepCheck::Add (*myMap (myShape), theStatus);
 }
 
 

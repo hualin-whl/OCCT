@@ -21,7 +21,6 @@
 #include <Standard_DefineAlloc.hxx>
 #include <Standard_Handle.hxx>
 
-#include <Standard_Real.hxx>
 #include <TColStd_Array1OfReal.hxx>
 #include <TColStd_Array1OfInteger.hxx>
 #include <Standard_Integer.hxx>
@@ -29,7 +28,6 @@
 #include <NCollection_IndexedDataMap.hxx>
 class TopoDS_Face;
 class DBRep_Face;
-class TopoDS_Shape;
 class TopTools_OrientedShapeMapHasher;
 
 //! Creation of isoparametric curves.

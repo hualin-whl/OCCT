@@ -27,17 +27,12 @@
 #include <Standard_Integer.hxx>
 #include <TColStd_Array1OfReal.hxx>
 #include <Standard_Boolean.hxx>
-#include <gp_Pnt2d.hxx>
-#include <gp_Vec2d.hxx>
 #include <GeomAbs_CurveType.hxx>
 #include <gp_Lin2d.hxx>
 #include <gp_Circ2d.hxx>
 #include <gp_Elips2d.hxx>
 #include <gp_Hypr2d.hxx>
 #include <gp_Parab2d.hxx>
-class Standard_OutOfRange;
-class Standard_NoSuchObject;
-class Standard_DomainError;
 class gp_Pnt2d;
 class gp_Vec2d;
 class Geom2d_BezierCurve;

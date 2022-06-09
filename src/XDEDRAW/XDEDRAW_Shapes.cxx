@@ -34,6 +34,9 @@
 #include <XCAFDoc_Location.hxx>
 #include <XCAFDoc_ShapeTool.hxx>
 #include <XDEDRAW_Shapes.hxx>
+#include <XSAlgo.hxx>
+#include <XSAlgo_AlgoContainer.hxx>
+#include <UnitsMethods.hxx>
 
 #include <stdio.h>
 //=======================================================================
@@ -54,6 +57,14 @@ static Standard_Integer addShape (Draw_Interpretor& di, Standard_Integer argc, c
   {
     di << "Syntax error: shape '" << argv[2] << "' is undefined\n";
     return 1;
+  }
+
+  Standard_Real aLengthUnit = 1.;
+  if (!XCAFDoc_DocumentTool::GetLengthUnit(Doc, aLengthUnit))
+  {
+    XSAlgo::AlgoContainer()->PrepareForTransfer(); // update unit info
+    aLengthUnit = UnitsMethods::GetCasCadeLengthUnit(UnitsMethods_LengthUnit_Meter);
+    XCAFDoc_DocumentTool::SetLengthUnit(Doc, aLengthUnit);
   }
 
   Handle(XCAFDoc_ShapeTool) myAssembly = XCAFDoc_DocumentTool::ShapeTool(Doc->Main());
@@ -987,6 +998,42 @@ static Standard_Integer XGetProperties(Draw_Interpretor& di, Standard_Integer ar
   return 0;
 }
 
+static Standard_Integer XAutoNaming (Draw_Interpretor& theDI,
+                                     Standard_Integer theNbArgs,
+                                     const char** theArgVec)
+{
+  if (theNbArgs != 2 && theNbArgs != 3)
+  {
+    theDI << "Syntax error: wrong number of arguments";
+    return 1;
+  }
+
+  Handle(TDocStd_Document) aDoc;
+  DDocStd::GetDocument (theArgVec[1], aDoc);
+  if (aDoc.IsNull())
+  {
+    theDI << "Syntax error: '" << theArgVec[1] << "' is not a document";
+    return 1;
+  }
+
+  Handle(XCAFDoc_ShapeTool) aShapeTool = XCAFDoc_DocumentTool::ShapeTool (aDoc->Main());
+  if (theNbArgs == 2)
+  {
+    theDI << (aShapeTool->AutoNaming() ? "1" : "0");
+    return 0;
+  }
+
+  bool toEnable = true;
+  if (!Draw::ParseOnOff (theArgVec[2], toEnable))
+  {
+    theDI << "Syntax error at '" << theArgVec[2] << "'";
+    return 1;
+  }
+
+  aShapeTool->SetAutoNaming (toEnable);
+  return 0;
+}
+
 //=======================================================================
 //function : InitCommands
 //purpose  : 
@@ -1102,4 +1149,7 @@ void XDEDRAW_Shapes::InitCommands(Draw_Interpretor& di)
 
   di.Add("XGetProperties", "Doc Label \t: prints named properties assigned to the Label",
          __FILE__, XGetProperties, g);
+
+  di.Add ("XAutoNaming","Doc [0|1]\t: Disable/enable autonaming to Document",
+          __FILE__, XAutoNaming, g);
 }

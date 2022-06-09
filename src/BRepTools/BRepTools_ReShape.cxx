@@ -17,24 +17,17 @@
 
 #include <BRep_Builder.hxx>
 #include <BRep_GCurve.hxx>
-#include <BRep_ListIteratorOfListOfCurveRepresentation.hxx>
-#include <BRep_ListOfCurveRepresentation.hxx>
 #include <BRep_TEdge.hxx>
 #include <BRep_Tool.hxx>
 #include <BRepTools_ReShape.hxx>
 #include <Geom_Surface.hxx>
 #include <NCollection_IndexedMap.hxx>
 #include <Standard_Type.hxx>
-#include <TopExp_Explorer.hxx>
 #include <TopLoc_Location.hxx>
 #include <TopoDS.hxx>
-#include <TopoDS_Compound.hxx>
-#include <TopoDS_Edge.hxx>
 #include <TopoDS_Face.hxx>
 #include <TopoDS_Iterator.hxx>
 #include <TopoDS_Shape.hxx>
-#include <TopoDS_Shell.hxx>
-#include <TopoDS_Solid.hxx>
 
 IMPLEMENT_STANDARD_RTTIEXT(BRepTools_ReShape,Standard_Transient)
 
@@ -174,7 +167,7 @@ void BRepTools_ReShape::replace (const TopoDS_Shape& ashape,
 
   if (myConsiderLocation) {
     //sln 29.11.01 Bug22: Change location of 'newshape' in accordance with location of 'shape'
-    newshape.Location(newshape.Location().Multiplied(shape.Location().Inverted()));
+    newshape.Location(newshape.Location().Multiplied(shape.Location().Inverted()), Standard_False);
     TopLoc_Location nullLoc; 
     shape.Location ( nullLoc );
   }
@@ -243,8 +236,8 @@ TopoDS_Shape BRepTools_ReShape::Value (const TopoDS_Shape& ashape) const
   if (myConsiderLocation) {
     //sln 29.11.01 Bug22: Recalculate location of resulting shape in accordance with
     //whether result is from map or not
-    if(fromMap) res.Location(ashape.Location()*res.Location());
-    else res.Location(ashape.Location());
+    if(fromMap) res.Location(ashape.Location()*res.Location(), Standard_False);
+    else res.Location(ashape.Location(), Standard_False);
   }
 
   return res;
@@ -300,7 +293,7 @@ Standard_Integer BRepTools_ReShape::Status(const TopoDS_Shape& ashape,
   {
     TopLoc_Location aResLoc = (res >0 && !newsh.Location().IsIdentity() ? 
       aLocSh * newsh.Location() : aLocSh);
-    newsh.Location(aResLoc);
+    newsh.Location(aResLoc, Standard_False);
   }
   return res;
 }

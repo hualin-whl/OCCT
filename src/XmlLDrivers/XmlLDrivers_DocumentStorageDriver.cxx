@@ -24,7 +24,7 @@
 #include <LDOM_XmlWriter.hxx>
 #include <OSD_Environment.hxx>
 #include <OSD_File.hxx>
-#include <OSD_OpenFile.hxx>
+#include <OSD_FileSystem.hxx>
 #include <PCDM.hxx>
 #include <PCDM_ReadWriter.hxx>
 #include <Standard_ErrorHandler.hxx>
@@ -98,12 +98,11 @@ void XmlLDrivers_DocumentStorageDriver::Write (const Handle(CDM_Document)&      
 {
   myFileName = theFileName;
 
-  std::ofstream aFileStream;
-  OSD_OpenStream (aFileStream, theFileName, std::ios::out);
-
-  if (aFileStream.is_open() && aFileStream.good())
+  const Handle(OSD_FileSystem)& aFileSystem = OSD_FileSystem::DefaultFileSystem();
+  std::shared_ptr<std::ostream> aFileStream = aFileSystem->OpenOStream (theFileName, std::ios::out | std::ios::binary);
+  if (aFileStream.get() != NULL && aFileStream->good())
   {
-    Write (theDocument, aFileStream, theRange);
+    Write (theDocument, *aFileStream, theRange);
   }
   else
   {

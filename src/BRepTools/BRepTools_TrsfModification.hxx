@@ -22,10 +22,7 @@
 
 #include <gp_Trsf.hxx>
 #include <BRepTools_Modification.hxx>
-#include <Standard_Boolean.hxx>
-#include <Standard_Real.hxx>
 #include <GeomAbs_Shape.hxx>
-class gp_Trsf;
 class TopoDS_Face;
 class Geom_Surface;
 class TopLoc_Location;

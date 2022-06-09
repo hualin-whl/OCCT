@@ -21,7 +21,6 @@
 #include <Message.hxx>
 #include <Message_Messenger.hxx>
 #include <NCollection_Buffer.hxx>
-#include <NCollection_List.hxx>
 #include <NCollection_Map.hxx>
 #include <OSD_Environment.hxx>
 #include <Standard_Stream.hxx>
@@ -40,10 +39,6 @@ IMPLEMENT_STANDARD_RTTIEXT(Font_FontMgr,Standard_Transient)
 
   #include <windows.h>
   #include <stdlib.h>
-
-  #if defined(_MSC_VER) && defined(HAVE_FREETYPE)
-    #pragma comment (lib, "freetype.lib")
-  #endif
 
   namespace
   {

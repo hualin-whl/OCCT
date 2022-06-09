@@ -21,13 +21,9 @@
 #include <Standard_DefineAlloc.hxx>
 #include <Standard_Handle.hxx>
 
-#include <Standard_Real.hxx>
-#include <Standard_Boolean.hxx>
 #include <Standard_Integer.hxx>
 #include <TopTools_ListOfShape.hxx>
 class BRepBuilderAPI_Sewing;
-class Standard_OutOfRange;
-class Standard_NoSuchObject;
 class TopoDS_Shape;
 class TopoDS_Edge;
 

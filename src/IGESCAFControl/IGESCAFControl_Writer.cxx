@@ -15,9 +15,7 @@
 
 #include <IGESCAFControl.hxx>
 #include <IGESCAFControl_Writer.hxx>
-#include <IGESData_IGESEntity.hxx>
 #include <IGESData_IGESModel.hxx>
-#include <IGESData_NameEntity.hxx>
 #include <IGESGraph_Color.hxx>
 #include <IGESGraph_DefinitionLevel.hxx>
 #include <IGESSolid_Face.hxx>
@@ -28,30 +26,28 @@
 #include <TCollection_AsciiString.hxx>
 #include <TCollection_HAsciiString.hxx>
 #include <TCollection_HExtendedString.hxx>
-#include <TColStd_HSequenceOfExtendedString.hxx>
 #include <TDataStd_Name.hxx>
-#include <TDF_ChildIterator.hxx>
 #include <TDF_Label.hxx>
 #include <TDF_LabelSequence.hxx>
 #include <TDocStd_Document.hxx>
-#include <TopAbs.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Face.hxx>
 #include <TopoDS_Iterator.hxx>
 #include <TopoDS_Shape.hxx>
-#include <TopTools_SequenceOfShape.hxx>
-#include <Transfer_FinderProcess.hxx>
 #include <Transfer_TransientListBinder.hxx>
 #include <TransferBRep.hxx>
 #include <TransferBRep_ShapeMapper.hxx>
-#include <XCAFDoc_ColorTool.hxx>
 #include <XCAFDoc_DocumentTool.hxx>
 #include <XCAFDoc_LayerTool.hxx>
+#include <XCAFDoc_LengthUnit.hxx>
 #include <XCAFDoc_ShapeTool.hxx>
 #include <XCAFPrs.hxx>
 #include <XCAFPrs_Style.hxx>
+#include <XSAlgo.hxx>
+#include <XSAlgo_AlgoContainer.hxx>
 #include <XSControl_WorkSession.hxx>
+#include <UnitsMethods.hxx>
 
 namespace
 {
@@ -98,11 +94,11 @@ namespace
       }
     }
 
-    if (!hasReferredShape && !hasComponents)
+    if (!hasReferredShape && !hasComponents && !thePrevName.IsNull())
     {
       TopoDS_Shape aShape;
       if (!XCAFDoc_ShapeTool::GetShape (theLabel, aShape)) return;
-      aShape.Move (theLocation);
+      aShape.Move (theLocation, Standard_False);
       theMapOfShapeNames.Bind (aShape, thePrevName->Get());
     }
   }
@@ -177,6 +173,7 @@ Standard_Boolean IGESCAFControl_Writer::Transfer (const TDF_LabelSequence& label
                                                   const Message_ProgressRange& theProgress)
 {  
   if ( labels.Length() <=0 ) return Standard_False;
+  prepareUnit(labels.First()); // set local length unit to the model
   Message_ProgressScope aPS(theProgress, "Labels", labels.Length());
   for ( Standard_Integer i=1; i <= labels.Length() && aPS.More(); i++ )
   {
@@ -559,6 +556,25 @@ Standard_Boolean IGESCAFControl_Writer::WriteNames (const TDF_LabelSequence& the
   }
 
   return Standard_True;
+}
+
+//=======================================================================
+//function : prepareUnit
+//purpose  :
+//=======================================================================
+void IGESCAFControl_Writer::prepareUnit(const TDF_Label& theLabel)
+{
+  Handle(XCAFDoc_LengthUnit) aLengthAttr;
+  if (!theLabel.IsNull() &&
+    theLabel.Root().FindAttribute(XCAFDoc_LengthUnit::GetID(), aLengthAttr))
+  {
+    Model()->ChangeGlobalSection().SetCascadeUnit(aLengthAttr->GetUnitValue() * 1000);
+  }
+  else
+  {
+    XSAlgo::AlgoContainer()->PrepareForTransfer(); // update unit info
+    Model()->ChangeGlobalSection().SetCascadeUnit(UnitsMethods::GetCasCadeLengthUnit());
+  }
 }
 
 //=======================================================================

@@ -21,7 +21,6 @@
 #include <gp_Pnt.hxx>
 #include <gp_Vec.hxx>
 #include <gp_Vec2d.hxx>
-#include <math_Vector.hxx>
 #include <math_Matrix.hxx>
 #include <BlendFunc_Tensor.hxx>
 #include <BlendFunc_SectionShape.hxx>
@@ -35,7 +34,6 @@
 #include <TColgp_Array1OfPnt2d.hxx>
 #include <TColgp_Array1OfVec2d.hxx>
 
-class math_Matrix;
 class gp_Circ;
 class Blend_Point;
 class gp_Ax1;

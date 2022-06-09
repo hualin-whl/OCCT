@@ -23,14 +23,17 @@
 #include <Precision.hxx>
 #include <Select3D_SensitiveEntity.hxx>
 #include <SelectBasics_PickResult.hxx>
+#include <SelectMgr.hxx>
 #include <SelectMgr_EntityOwner.hxx>
 #include <SelectMgr_FrustumBuilder.hxx>
-#include <SelectMgr_SortCriterion.hxx>
+#include <SelectMgr_SelectionImageFiller.hxx>
 #include <SelectMgr_SensitiveEntitySet.hxx>
+#include <SelectMgr_SortCriterion.hxx>
 #include <TColStd_Array1OfInteger.hxx>
 #include <TCollection_AsciiString.hxx>
 #include <TColStd_HArray1OfInteger.hxx>
 #include <TColStd_ListOfInteger.hxx>
+#include <V3d_View.hxx>
 
 #include <algorithm>
 
@@ -165,6 +168,7 @@ SelectMgr_ViewerSelector::SelectMgr_ViewerSelector()
   myToPreferClosest (Standard_True),
   myCameraScale (1.0),
   myToPrebuildBVH (Standard_False),
+  myIsSorted (Standard_False),
   myIsLeftChildQueuedFirst (Standard_False)
 {
   myEntitySetBuilder = new BVH_BinnedBuilder<Standard_Real, 3, 4> (BVH_Constants_LeafNodeSizeSingle, BVH_Constants_MaxTreeDepth, Standard_True);
@@ -226,15 +230,6 @@ void SelectMgr_ViewerSelector::Deactivate (const Handle(SelectMgr_Selection)& th
 
     myTolerances.Decrement (theSelection->Sensitivity());
   }
-}
-
-//==================================================
-// Function: Clear
-// Purpose :
-//==================================================
-void SelectMgr_ViewerSelector::Clear()
-{
-  mystored.Clear();
 }
 
 //=======================================================================
@@ -306,6 +301,30 @@ void SelectMgr_ViewerSelector::checkOverlap (const Handle(Select3D_SensitiveEnti
 }
 
 //=======================================================================
+// Function: updateZLayers
+// Purpose :
+//=======================================================================
+void SelectMgr_ViewerSelector::updateZLayers (const Handle(V3d_View)& theView)
+{
+  myZLayerOrderMap.Clear();
+  TColStd_SequenceOfInteger aZLayers;
+  theView->Viewer()->GetAllZLayers (aZLayers);
+  Standard_Integer aPos = 0;
+  Standard_Boolean isPrevDepthWrite = true;
+  for (TColStd_SequenceOfInteger::Iterator aLayerIter (aZLayers); aLayerIter.More(); aLayerIter.Next())
+  {
+    Graphic3d_ZLayerSettings aSettings = theView->Viewer()->ZLayerSettings (aLayerIter.Value());
+    if (aSettings.ToClearDepth()
+     || isPrevDepthWrite != aSettings.ToEnableDepthWrite())
+    {
+      ++aPos;
+    }
+    isPrevDepthWrite = aSettings.ToEnableDepthWrite();
+    myZLayerOrderMap.Bind (aLayerIter.Value(), aPos);
+  }
+}
+
+//=======================================================================
 // function: computeFrustum
 // purpose :
 //=======================================================================
@@ -356,8 +375,7 @@ void SelectMgr_ViewerSelector::traverseObject (const Handle(SelectMgr_Selectable
                                                const Handle(Graphic3d_Camera)& theCamera,
                                                const Graphic3d_Mat4d& theProjectionMat,
                                                const Graphic3d_Mat4d& theWorldViewMat,
-                                               const Standard_Integer theViewportWidth,
-                                               const Standard_Integer theViewportHeight)
+                                               const Graphic3d_Vec2i& theWinSize)
 {
   Handle(SelectMgr_SensitiveEntitySet)& anEntitySet = myMapOfObjectSensitives.ChangeFind (theObject);
   if (anEntitySet->Size() == 0)
@@ -365,6 +383,8 @@ void SelectMgr_ViewerSelector::traverseObject (const Handle(SelectMgr_Selectable
     return;
   }
 
+  const bool hasEntityTrsfPers = anEntitySet->HasEntityWithPersistence()
+                             && !theCamera.IsNull();
   const opencascade::handle<BVH_Tree<Standard_Real, 3> >& aSensitivesTree = anEntitySet->BVH();
   gp_GTrsf aInversedTrsf;
   if (theObject->HasTransformation() || !theObject->TransformPersistence().IsNull())
@@ -379,20 +399,12 @@ void SelectMgr_ViewerSelector::traverseObject (const Handle(SelectMgr_Selectable
       {
         return;
       }
+
+      const Graphic3d_Mat4d aMat = theObject->TransformPersistence()->Compute (theCamera,
+                                                                               theProjectionMat, theWorldViewMat,
+                                                                               theWinSize.x(), theWinSize.y());
       gp_GTrsf aTPers;
-      Graphic3d_Mat4d aMat = theObject->TransformPersistence()->Compute (theCamera, theProjectionMat, theWorldViewMat, theViewportWidth, theViewportHeight);
-
-      aTPers.SetValue (1, 1, aMat.GetValue (0, 0));
-      aTPers.SetValue (1, 2, aMat.GetValue (0, 1));
-      aTPers.SetValue (1, 3, aMat.GetValue (0, 2));
-      aTPers.SetValue (2, 1, aMat.GetValue (1, 0));
-      aTPers.SetValue (2, 2, aMat.GetValue (1, 1));
-      aTPers.SetValue (2, 3, aMat.GetValue (1, 2));
-      aTPers.SetValue (3, 1, aMat.GetValue (2, 0));
-      aTPers.SetValue (3, 2, aMat.GetValue (2, 1));
-      aTPers.SetValue (3, 3, aMat.GetValue (2, 2));
-      aTPers.SetTranslationPart (gp_XYZ (aMat.GetValue (0, 3), aMat.GetValue (1, 3), aMat.GetValue (2, 3)));
-
+      aTPers.SetMat4 (aMat);
       aInversedTrsf = (aTPers * gp_GTrsf (theObject->Transformation())).Inverted();
     }
   }
@@ -400,7 +412,8 @@ void SelectMgr_ViewerSelector::traverseObject (const Handle(SelectMgr_Selectable
   SelectMgr_SelectingVolumeManager aMgr = aInversedTrsf.Form() != gp_Identity
                                         ? theMgr.ScaleAndTransform (1, aInversedTrsf, NULL)
                                         : theMgr;
-  if (!aMgr.OverlapsBox (aSensitivesTree->MinPoint (0),
+  if (!hasEntityTrsfPers
+   && !aMgr.OverlapsBox (aSensitivesTree->MinPoint (0),
                          aSensitivesTree->MaxPoint (0)))
   {
     return;
@@ -482,12 +495,14 @@ void SelectMgr_ViewerSelector::traverseObject (const Handle(SelectMgr_Selectable
     {
       const Standard_Integer aLeftChildIdx  = aSensitivesTree->Child<0> (aNode);
       const Standard_Integer aRightChildIdx = aSensitivesTree->Child<1> (aNode);
-      const Standard_Boolean isLeftChildIn  =  aMgr.OverlapsBox (aSensitivesTree->MinPoint (aLeftChildIdx),
-                                                                 aSensitivesTree->MaxPoint (aLeftChildIdx));
-      const Standard_Boolean isRightChildIn = aMgr.OverlapsBox (aSensitivesTree->MinPoint (aRightChildIdx),
+      const Standard_Boolean isLeftChildIn  = hasEntityTrsfPers
+                                           || aMgr.OverlapsBox (aSensitivesTree->MinPoint (aLeftChildIdx),
+                                                                aSensitivesTree->MaxPoint (aLeftChildIdx));
+      const Standard_Boolean isRightChildIn = hasEntityTrsfPers
+                                           || aMgr.OverlapsBox (aSensitivesTree->MinPoint (aRightChildIdx),
                                                                 aSensitivesTree->MaxPoint (aRightChildIdx));
       if (isLeftChildIn
-          && isRightChildIn)
+       && isRightChildIn)
       {
         aNode = aLeftChildIdx;
         ++aHead;
@@ -544,17 +559,35 @@ void SelectMgr_ViewerSelector::traverseObject (const Handle(SelectMgr_Selectable
       }
       if (!aClipped)
       {
-        Standard_Integer aStartIdx = aSensitivesTree->BegPrimitive (aNode);
-        Standard_Integer anEndIdx = aSensitivesTree->EndPrimitive (aNode);
+        const Standard_Integer aStartIdx = aSensitivesTree->BegPrimitive (aNode);
+        const Standard_Integer anEndIdx  = aSensitivesTree->EndPrimitive (aNode);
         for (Standard_Integer anIdx = aStartIdx; anIdx <= anEndIdx; ++anIdx)
         {
           const Handle(SelectMgr_SensitiveEntity)& aSensitive = anEntitySet->GetSensitiveById (anIdx);
-          if (aSensitive->IsActiveForSelection())
+          if (!aSensitive->IsActiveForSelection())
           {
-            const Handle(Select3D_SensitiveEntity)& anEnt = aSensitive->BaseSensitive();
-            computeFrustum (anEnt, theMgr, aMgr, aInversedTrsf, aScaledTrnsfFrustums, aTmpMgr);
-            checkOverlap (anEnt, aInversedTrsf, aTmpMgr);
+            continue;
           }
+
+          const Handle(Select3D_SensitiveEntity)& anEnt = aSensitive->BaseSensitive();
+
+          gp_GTrsf aInvSensTrsf = aInversedTrsf;
+          if (!anEnt->TransformPersistence().IsNull())
+          {
+            if (theCamera.IsNull())
+            {
+              continue;
+            }
+            const Graphic3d_Mat4d aMat = anEnt->TransformPersistence()->Compute (theCamera,
+                                                                                 theProjectionMat, theWorldViewMat,
+                                                                                 theWinSize.x(), theWinSize.y());
+            gp_GTrsf aTPers;
+            aTPers.SetMat4 (aMat);
+            aInvSensTrsf = (aTPers * gp_GTrsf(theObject->Transformation())).Inverted();
+          }
+
+          computeFrustum (anEnt, theMgr, aMgr, aInvSensTrsf, aScaledTrnsfFrustums, aTmpMgr);
+          checkOverlap (anEnt, aInvSensTrsf, aTmpMgr);
         }
       }
       if (aHead < 0)
@@ -593,15 +626,15 @@ void SelectMgr_ViewerSelector::traverseObject (const Handle(SelectMgr_Selectable
 // purpose : Traverses BVH containing all added selectable objects and
 //           finds candidates for further search of overlap
 //=======================================================================
-void SelectMgr_ViewerSelector::TraverseSensitives()
+void SelectMgr_ViewerSelector::TraverseSensitives (const Standard_Integer theViewId)
 {
   SelectMgr_BVHThreadPool::Sentry aSentry (myBVHThreadPool);
 
   mystored.Clear();
+  myIsSorted = false;
 
-  Standard_Integer aWidth = 0;
-  Standard_Integer aHeight = 0;
-  mySelectingVolumeMgr.WindowSize (aWidth, aHeight);
+  Graphic3d_Vec2i aWinSize;
+  mySelectingVolumeMgr.WindowSize (aWinSize.x(), aWinSize.y());
 
   const Handle(Graphic3d_Camera)& aCamera = mySelectingVolumeMgr.Camera();
   Graphic3d_Mat4d aProjectionMat, aWorldViewMat;
@@ -617,10 +650,10 @@ void SelectMgr_ViewerSelector::TraverseSensitives()
     myCameraScale = aCamera->IsOrthographic()
                   ? aCamera->Scale()
                   : 2.0 * Tan (aCamera->FOVy() * M_PI / 360.0);
-    const double aPixelSize = Max (1.0 / aWidth, 1.0 / aHeight);
+    const double aPixelSize = Max (1.0 / aWinSize.x(), 1.0 / aWinSize.y());
     myCameraScale *= aPixelSize;
   }
-  mySelectableObjects.UpdateBVH (aCamera, aProjectionMat, aWorldViewMat, aViewState, aWidth, aHeight);
+  mySelectableObjects.UpdateBVH (aCamera, aWinSize);
 
   for (Standard_Integer aBVHSetIt = 0; aBVHSetIt < SelectMgr_SelectableObjectSet::BVHSubsetNb; ++aBVHSetIt)
   {
@@ -664,7 +697,7 @@ void SelectMgr_ViewerSelector::TraverseSensitives()
       aWorldViewMat = aNewCamera->OrientationMatrix(); // should be identity matrix
       aProjectionMat = aNewCamera->ProjectionMatrix(); // should be the same to aProjectionMat
       aBuilder->SetCamera (aNewCamera);
-      aBuilder->SetWindowSize (aWidth, aHeight);
+      aBuilder->SetWindowSize (aWinSize.x(), aWinSize.y());
       aMgr = mySelectingVolumeMgr.ScaleAndTransform (1, aTFrustum, aBuilder);
     }
     else
@@ -717,14 +750,16 @@ void SelectMgr_ViewerSelector::TraverseSensitives()
       }
       else
       {
-        Standard_Integer aStartIdx = aBVHTree->BegPrimitive (aNode);
-        Standard_Integer anEndIdx  = aBVHTree->EndPrimitive (aNode);
+        const Standard_Integer aStartIdx = aBVHTree->BegPrimitive (aNode);
+        const Standard_Integer anEndIdx  = aBVHTree->EndPrimitive (aNode);
         for (Standard_Integer anIdx = aStartIdx; anIdx <= anEndIdx; ++anIdx)
         {
-          const Handle(SelectMgr_SelectableObject)& aSelectableObject =
-            mySelectableObjects.GetObjectById (aBVHSubset, anIdx);
-
-          traverseObject (aSelectableObject, aMgr, aCamera, aProjectionMat, aWorldViewMat, aWidth, aHeight);
+          const Handle(SelectMgr_SelectableObject)& aSelObj = mySelectableObjects.GetObjectById (aBVHSubset, anIdx);
+          const Handle(Graphic3d_ViewAffinity)& aViewAffinity = aSelObj->ViewAffinity();
+          if (theViewId == -1 || aViewAffinity->IsVisible (theViewId))
+          {
+            traverseObject (aSelObj, aMgr, aCamera, aProjectionMat, aWorldViewMat, aWinSize);
+          }
         }
         if (aHead < 0)
         {
@@ -747,6 +782,38 @@ void SelectMgr_ViewerSelector::TraverseSensitives()
 void SelectMgr_ViewerSelector::ClearPicked()
 {
   mystored.Clear();
+  myIsSorted = true;
+}
+
+//==================================================
+// Function: RemovePicked
+// Purpose :
+//==================================================
+bool SelectMgr_ViewerSelector::RemovePicked (const Handle(SelectMgr_SelectableObject)& theObject)
+{
+  if (mystored.IsEmpty()
+  || !mySelectableObjects.Contains (theObject))
+  {
+    return false;
+  }
+
+  bool isRemoved = false;
+  for (Standard_Integer aPickIter = 1; aPickIter <= mystored.Extent(); ++aPickIter)
+  {
+    const Handle(SelectMgr_EntityOwner)& aStoredOwner = mystored.FindKey (aPickIter);
+    if (!aStoredOwner.IsNull()
+      && aStoredOwner->IsSameSelectable (theObject))
+    {
+      mystored.RemoveFromIndex (aPickIter);
+      --aPickIter;
+      isRemoved = true;
+    }
+  }
+  if (isRemoved)
+  {
+    myIsSorted = false;
+  }
+  return isRemoved;
 }
 
 //=======================================================================
@@ -760,7 +827,12 @@ Handle(SelectMgr_EntityOwner) SelectMgr_ViewerSelector::Picked (const Standard_I
     return Handle(SelectMgr_EntityOwner)();
   }
 
-  const Standard_Integer anOwnerIdx = myIndexes->Value (theRank);
+  if (!myIsSorted)
+  {
+    SortResult();
+  }
+
+  const Standard_Integer anOwnerIdx = myIndexes.Value (theRank);
   const Handle(SelectMgr_EntityOwner)& aStoredOwner = mystored.FindKey (anOwnerIdx);
   return aStoredOwner;
 }
@@ -772,7 +844,12 @@ Handle(SelectMgr_EntityOwner) SelectMgr_ViewerSelector::Picked (const Standard_I
 const SelectMgr_SortCriterion& SelectMgr_ViewerSelector::PickedData(const Standard_Integer theRank) const
 {
   Standard_OutOfRange_Raise_if (theRank < 1 || theRank > NbPicked(), "SelectMgr_ViewerSelector::PickedData() out of range index");
-  const Standard_Integer anOwnerIdx = myIndexes->Value (theRank);
+  if (!myIsSorted)
+  {
+    SortResult();
+  }
+
+  const Standard_Integer anOwnerIdx = myIndexes.Value (theRank);
   return mystored.FindFromIndex (anOwnerIdx);
 }
 
@@ -898,25 +975,26 @@ TCollection_AsciiString SelectMgr_ViewerSelector::Status (const Handle(SelectMgr
 //function : SortResult
 //purpose  :
 //=======================================================================
-void SelectMgr_ViewerSelector::SortResult()
+void SelectMgr_ViewerSelector::SortResult() const
 {
   if (mystored.IsEmpty())
   {
+    myIsSorted = true;
     return;
   }
 
   const Standard_Integer anExtent = mystored.Extent();
-  if (myIndexes.IsNull() || anExtent != myIndexes->Length())
+  if (anExtent != myIndexes.Length())
   {
-    myIndexes = new TColStd_HArray1OfInteger (1, anExtent);
+    myIndexes.Resize (1, anExtent, false);
   }
 
-  TColStd_Array1OfInteger& anIndexArray = myIndexes->ChangeArray1();
   for (Standard_Integer anIndexIter = 1; anIndexIter <= anExtent; ++anIndexIter)
   {
-    anIndexArray.SetValue (anIndexIter, anIndexIter);
+    myIndexes.SetValue (anIndexIter, anIndexIter);
   }
-  std::sort (anIndexArray.begin(), anIndexArray.end(), CompareResults (mystored, myToPreferClosest));
+  std::sort (myIndexes.begin(), myIndexes.end(), CompareResults (mystored, myToPreferClosest));
+  myIsSorted = true;
 }
 
 //=======================================================================
@@ -970,6 +1048,7 @@ void SelectMgr_ViewerSelector::RemoveSelectableObject (const Handle(SelectMgr_Se
   Handle(SelectMgr_SelectableObject) anObj = theObject;
   if (myMapOfObjectSensitives.UnBind (theObject))
   {
+    RemovePicked (theObject);
     mySelectableObjects.Remove (theObject);
   }
 }
@@ -998,20 +1077,9 @@ void SelectMgr_ViewerSelector::RebuildObjectsTree (const Standard_Boolean theIsF
 
   if (theIsForce)
   {
-    Standard_Integer aViewportWidth, aViewportHeight;
-    mySelectingVolumeMgr.WindowSize (aViewportWidth, aViewportHeight);
-
-    Standard_Integer aWidth;
-    Standard_Integer aHeight;
-    mySelectingVolumeMgr.WindowSize (aWidth, aHeight);
-    const Handle(Graphic3d_Camera)& aCamera = mySelectingVolumeMgr.Camera();
-    const Graphic3d_Mat4d&       aProjMat    = !aCamera.IsNull() ? aCamera->ProjectionMatrix()
-                                                                 : SelectMgr_ViewerSelector_THE_IDENTITY_MAT;
-    const Graphic3d_Mat4d&       anOrientMat = !aCamera.IsNull() ? aCamera->OrientationMatrix()
-                                                                 : SelectMgr_ViewerSelector_THE_IDENTITY_MAT;
-    Graphic3d_WorldViewProjState aViewState  = !aCamera.IsNull() ? aCamera->WorldViewProjState()
-                                                                 : Graphic3d_WorldViewProjState();
-    mySelectableObjects.UpdateBVH (aCamera, aProjMat, anOrientMat, aViewState, aWidth, aHeight);
+    Graphic3d_Vec2i aWinSize;
+    mySelectingVolumeMgr.WindowSize (aWinSize.x(), aWinSize.y());
+    mySelectableObjects.UpdateBVH (mySelectingVolumeMgr.Camera(), aWinSize);
   }
 }
 
@@ -1087,6 +1155,208 @@ void SelectMgr_ViewerSelector::AllowOverlapDetection (const Standard_Boolean the
 }
 
 //=======================================================================
+// Function: Pick
+// Purpose :
+//=======================================================================
+void SelectMgr_ViewerSelector::Pick (const Standard_Integer theXPix,
+                                     const Standard_Integer theYPix,
+                                     const Handle(V3d_View)& theView)
+{
+  updateZLayers (theView);
+
+  gp_Pnt2d aMousePos (static_cast<Standard_Real> (theXPix),
+                      static_cast<Standard_Real> (theYPix));
+  mySelectingVolumeMgr.InitPointSelectingVolume (aMousePos);
+
+  mySelectingVolumeMgr.SetPixelTolerance (myTolerances.Tolerance());
+  mySelectingVolumeMgr.SetCamera (theView->Camera());
+  Standard_Integer aWidth = 0, aHeight = 0;
+  theView->Window()->Size (aWidth, aHeight);
+  mySelectingVolumeMgr.SetWindowSize (aWidth, aHeight);
+
+  mySelectingVolumeMgr.BuildSelectingVolume();
+  mySelectingVolumeMgr.SetViewClipping (theView->ClipPlanes(), Handle(Graphic3d_SequenceOfHClipPlane)(), NULL);
+
+  TraverseSensitives (theView->View()->Identification());
+}
+
+//=======================================================================
+// Function: Pick
+// Purpose :
+//=======================================================================
+void SelectMgr_ViewerSelector::Pick (const Standard_Integer theXPMin,
+                                     const Standard_Integer theYPMin,
+                                     const Standard_Integer theXPMax,
+                                     const Standard_Integer theYPMax,
+                                     const Handle(V3d_View)& theView)
+{
+  updateZLayers (theView);
+
+  gp_Pnt2d aMinMousePos (static_cast<Standard_Real> (theXPMin),
+                         static_cast<Standard_Real> (theYPMin));
+  gp_Pnt2d aMaxMousePos (static_cast<Standard_Real> (theXPMax),
+                         static_cast<Standard_Real> (theYPMax));
+  mySelectingVolumeMgr.InitBoxSelectingVolume (aMinMousePos,
+                                               aMaxMousePos);
+
+  mySelectingVolumeMgr.SetCamera (theView->Camera());
+  Standard_Integer aWidth = 0, aHeight = 0;
+  theView->Window()->Size (aWidth, aHeight);
+  mySelectingVolumeMgr.SetWindowSize (aWidth, aHeight);
+
+  mySelectingVolumeMgr.BuildSelectingVolume();
+  mySelectingVolumeMgr.SetViewClipping (theView->ClipPlanes(), Handle(Graphic3d_SequenceOfHClipPlane)(), NULL);
+  TraverseSensitives (theView->View()->Identification());
+}
+
+//=======================================================================
+// Function: Pick
+// Purpose : Selection using a polyline
+//=======================================================================
+void SelectMgr_ViewerSelector::Pick (const TColgp_Array1OfPnt2d& thePolyline,
+                                     const Handle(V3d_View)& theView)
+{
+  updateZLayers (theView);
+
+  mySelectingVolumeMgr.InitPolylineSelectingVolume (thePolyline);
+  mySelectingVolumeMgr.SetCamera (theView->Camera());
+  Standard_Integer aWidth = 0, aHeight = 0;
+  theView->Window()->Size (aWidth, aHeight);
+  mySelectingVolumeMgr.SetWindowSize (aWidth, aHeight);
+  mySelectingVolumeMgr.BuildSelectingVolume();
+  mySelectingVolumeMgr.SetViewClipping (theView->ClipPlanes(), Handle(Graphic3d_SequenceOfHClipPlane)(), NULL);
+
+  TraverseSensitives (theView->View()->Identification());
+}
+
+//=======================================================================
+// Function: Pick
+// Purpose :
+//=======================================================================
+void SelectMgr_ViewerSelector::Pick (const gp_Ax1& theAxis,
+                                     const Handle(V3d_View)& theView)
+{
+  updateZLayers (theView);
+
+  mySelectingVolumeMgr.InitAxisSelectingVolume (theAxis);
+  mySelectingVolumeMgr.BuildSelectingVolume();
+  mySelectingVolumeMgr.SetViewClipping (theView->ClipPlanes(), Handle(Graphic3d_SequenceOfHClipPlane)(), NULL);
+
+  TraverseSensitives (theView->View()->Identification());
+}
+
+//=======================================================================
+//function : ToPixMap
+//purpose  :
+//=======================================================================
+Standard_Boolean SelectMgr_ViewerSelector::ToPixMap (Image_PixMap& theImage,
+                                                     const Handle(V3d_View)& theView,
+                                                     const StdSelect_TypeOfSelectionImage theType,
+                                                     const Standard_Integer               thePickedIndex)
+{
+  if (theImage.IsEmpty())
+  {
+    throw Standard_ProgramError ("SelectMgr_ViewerSelector::ToPixMap() has been called with empty image");
+  }
+
+  Handle(SelectMgr_SelectionImageFiller) aFiller = SelectMgr_SelectionImageFiller::CreateFiller (theImage, this, theType);
+  if (aFiller.IsNull())
+  {
+    return Standard_False;
+  }
+
+  const Standard_Integer aSizeX = static_cast<Standard_Integer> (theImage.SizeX());
+  const Standard_Integer aSizeY = static_cast<Standard_Integer> (theImage.SizeY());
+  for (Standard_Integer aRowIter = 0; aRowIter < aSizeY; ++aRowIter)
+  {
+    for (Standard_Integer aColIter = 0; aColIter < aSizeX; ++aColIter)
+    {
+      Pick (aColIter, aRowIter, theView);
+      aFiller->Fill (aColIter, aRowIter, thePickedIndex);
+    }
+  }
+  aFiller->Flush();
+  return Standard_True;
+}
+
+//=======================================================================
+// Function: DisplaySensitive.
+// Purpose : Display active primitives.
+//=======================================================================
+void SelectMgr_ViewerSelector::DisplaySensitive (const Handle(V3d_View)& theView)
+{
+  for (SelectMgr_SelectableObjectSet::Iterator aSelectableIt (mySelectableObjects); aSelectableIt.More(); aSelectableIt.Next())
+  {
+    Handle(Graphic3d_Structure) aStruct = new Graphic3d_Structure (theView->Viewer()->StructureManager());
+    const Handle (SelectMgr_SelectableObject)& anObj = aSelectableIt.Value();
+    for (SelectMgr_SequenceOfSelection::Iterator aSelIter (anObj->Selections()); aSelIter.More(); aSelIter.Next())
+    {
+      if (aSelIter.Value()->GetSelectionState() == SelectMgr_SOS_Activated)
+      {
+        SelectMgr::ComputeSensitivePrs (aStruct, aSelIter.Value(), anObj->Transformation(), anObj->TransformPersistence());
+      }
+    }
+
+    myStructs.Append (aStruct);
+  }
+
+  for (Graphic3d_SequenceOfStructure::Iterator aStructIter (myStructs); aStructIter.More(); aStructIter.Next())
+  {
+    Handle(Graphic3d_Structure)& aStruct = aStructIter.ChangeValue();
+    aStruct->SetDisplayPriority (Graphic3d_DisplayPriority_Topmost);
+    aStruct->Display();
+  }
+
+  theView->Update();
+}
+
+//=======================================================================
+// Function: ClearSensitive
+// Purpose :
+//=======================================================================
+void SelectMgr_ViewerSelector::ClearSensitive (const Handle(V3d_View)& theView)
+{
+  for (Graphic3d_SequenceOfStructure::Iterator aStructIter (myStructs); aStructIter.More(); aStructIter.Next())
+  {
+    const Handle(Graphic3d_Structure)& aPrs = aStructIter.ChangeValue();
+    aPrs->Erase();
+    aPrs->Clear();
+    aPrs->Remove();
+  }
+  myStructs.Clear();
+
+  if (!theView.IsNull())
+  {
+    theView->Update();
+  }
+}
+
+//=======================================================================
+//function : DisplaySenstive
+//purpose  :
+//=======================================================================
+void SelectMgr_ViewerSelector::DisplaySensitive (const Handle(SelectMgr_Selection)& theSel,
+                                                 const gp_Trsf& theTrsf,
+                                                 const Handle(V3d_View)& theView,
+                                                 const Standard_Boolean theToClearOthers)
+{
+  if (theToClearOthers)
+  {
+    ClearSensitive (theView);
+  }
+
+  Handle(Graphic3d_Structure) aStruct = new Graphic3d_Structure (theView->Viewer()->StructureManager());
+
+  SelectMgr::ComputeSensitivePrs (aStruct, theSel, theTrsf, Handle(Graphic3d_TransformPers)());
+
+  myStructs.Append (aStruct);
+  myStructs.Last()->SetDisplayPriority (Graphic3d_DisplayPriority_Topmost);
+  myStructs.Last()->Display();
+
+  theView->Update();
+}
+
+//=======================================================================
 //function : DumpJson
 //purpose  : 
 //=======================================================================
@@ -1116,11 +1386,17 @@ void SelectMgr_ViewerSelector::DumpJson (Standard_OStream& theOStream, Standard_
   OCCT_DUMP_FIELD_VALUES_DUMPED (theOStream, theDepth, &myCameraDir)
   OCCT_DUMP_FIELD_VALUE_NUMERICAL (theOStream, myCameraScale)
 
-  if (!myIndexes.IsNull())
-    OCCT_DUMP_FIELD_VALUE_NUMERICAL (theOStream, myIndexes->Size())
+  OCCT_DUMP_FIELD_VALUE_NUMERICAL (theOStream, myIndexes.Size())
 
   OCCT_DUMP_FIELD_VALUE_NUMERICAL (theOStream, myIsLeftChildQueuedFirst)
   OCCT_DUMP_FIELD_VALUE_NUMERICAL (theOStream, myMapOfObjectSensitives.Extent())
+
+  OCCT_DUMP_FIELD_VALUE_NUMERICAL (theOStream, myStructs.Length())
+  for (Graphic3d_SequenceOfStructure::Iterator aStructsIt (myStructs); aStructsIt.More(); aStructsIt.Next())
+  {
+    const Handle(Graphic3d_Structure)& aStructure = aStructsIt.Value();
+    OCCT_DUMP_FIELD_VALUE_POINTER (theOStream, aStructure)
+  }
 }
 
 //=======================================================================

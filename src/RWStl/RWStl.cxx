@@ -18,6 +18,7 @@
 #include <Message_ProgressScope.hxx>
 #include <NCollection_Vector.hxx>
 #include <OSD_File.hxx>
+#include <OSD_FileSystem.hxx>
 #include <OSD_OpenFile.hxx>
 #include <RWStl_Reader.hxx>
 
@@ -106,13 +107,15 @@ namespace
 }
 
 //=============================================================================
-//function : Read
+//function : ReadFile
 //purpose  :
 //=============================================================================
 Handle(Poly_Triangulation) RWStl::ReadFile (const Standard_CString theFile,
+                                            const Standard_Real theMergeAngle,
                                             const Message_ProgressRange& theProgress)
 {
   Reader aReader;
+  aReader.SetMergeAngle (theMergeAngle);
   aReader.Read (theFile, theProgress);
   // note that returned bool value is ignored intentionally -- even if something went wrong,
   // but some data have been read, we at least will return these data
@@ -144,25 +147,18 @@ Handle(Poly_Triangulation) RWStl::ReadFile (const OSD_Path& theFile,
 Handle(Poly_Triangulation) RWStl::ReadBinary (const OSD_Path& theFile,
                                               const Message_ProgressRange& theProgress)
 {
-  OSD_File aFile(theFile);
-  if (!aFile.Exists())
-  {
-    return Handle(Poly_Triangulation)();
-  }
-
   TCollection_AsciiString aPath;
   theFile.SystemName (aPath);
 
-  std::filebuf aBuf;
-  OSD_OpenStream (aBuf, aPath, std::ios::in | std::ios::binary);
-  if (!aBuf.is_open())
+  const Handle(OSD_FileSystem)& aFileSystem = OSD_FileSystem::DefaultFileSystem();
+  std::shared_ptr<std::istream> aStream = aFileSystem->OpenIStream (aPath, std::ios::in | std::ios::binary);
+  if (aStream.get() == NULL)
   {
     return Handle(Poly_Triangulation)();
   }
-  Standard_IStream aStream (&aBuf);
 
   Reader aReader;
-  if (!aReader.ReadBinary (aStream, theProgress))
+  if (!aReader.ReadBinary (*aStream, theProgress))
   {
     return Handle(Poly_Triangulation)();
   }
@@ -177,31 +173,24 @@ Handle(Poly_Triangulation) RWStl::ReadBinary (const OSD_Path& theFile,
 Handle(Poly_Triangulation) RWStl::ReadAscii (const OSD_Path& theFile,
                                              const Message_ProgressRange& theProgress)
 {
-  OSD_File aFile (theFile);
-  if (!aFile.Exists())
-  {
-    return Handle(Poly_Triangulation)();
-  }
-
   TCollection_AsciiString aPath;
   theFile.SystemName (aPath);
 
-  std::filebuf aBuf;
-  OSD_OpenStream (aBuf, aPath, std::ios::in | std::ios::binary);
-  if (!aBuf.is_open())
+  const Handle(OSD_FileSystem)& aFileSystem = OSD_FileSystem::DefaultFileSystem();
+  std::shared_ptr<std::istream> aStream = aFileSystem->OpenIStream (aPath, std::ios::in | std::ios::binary);
+  if (aStream.get() == NULL)
   {
     return Handle(Poly_Triangulation)();
   }
-  Standard_IStream aStream (&aBuf);
 
   // get length of file to feed progress indicator
-  aStream.seekg (0, aStream.end);
-  std::streampos theEnd = aStream.tellg();
-  aStream.seekg (0, aStream.beg);
+  aStream->seekg (0, aStream->end);
+  std::streampos theEnd = aStream->tellg();
+  aStream->seekg (0, aStream->beg);
 
   Reader aReader;
   Standard_ReadLineBuffer aBuffer (THE_BUFFER_SIZE);
-  if (!aReader.ReadAscii (aStream, aBuffer, theEnd, theProgress))
+  if (!aReader.ReadAscii (*aStream, aBuffer, theEnd, theProgress))
   {
     return Handle(Poly_Triangulation)();
   }
@@ -349,7 +338,7 @@ Standard_Boolean RWStl::writeBinary (const Handle(Poly_Triangulation)& theMesh,
                                      FILE* theFile,
                                      const Message_ProgressRange& theProgress)
 {
-  char aHeader[80] = "STL Exported by OpenCASCADE [www.opencascade.com]";
+  char aHeader[80] = "STL Exported by Open CASCADE Technology [dev.opencascade.org]";
   if (fwrite (aHeader, 1, 80, theFile) != 80)
   {
     return Standard_False;

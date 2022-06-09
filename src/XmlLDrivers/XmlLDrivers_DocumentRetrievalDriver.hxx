@@ -27,8 +27,6 @@
 #include <Standard_Integer.hxx>
 #include <Storage_Data.hxx>
 class XmlMDF_ADriverTable;
-class TCollection_ExtendedString;
-class PCDM_Document;
 class CDM_Document;
 class CDM_Application;
 class Message_Messenger;
@@ -50,12 +48,14 @@ public:
   Standard_EXPORT virtual void Read (const TCollection_ExtendedString& theFileName, 
                                      const Handle(CDM_Document)& theNewDocument,
                                      const Handle(CDM_Application)& theApplication, 
+                                     const Handle(PCDM_ReaderFilter)& theFilter = Handle(PCDM_ReaderFilter)(),
                                      const Message_ProgressRange& theRange = Message_ProgressRange()) Standard_OVERRIDE;
 
   Standard_EXPORT virtual void Read (Standard_IStream&               theIStream,
                                      const Handle(Storage_Data)&     theStorageData,
                                      const Handle(CDM_Document)&     theDoc,
                                      const Handle(CDM_Application)&  theApplication,
+                                     const Handle(PCDM_ReaderFilter)& theFilter = Handle(PCDM_ReaderFilter)(),
                                      const Message_ProgressRange& theRange= Message_ProgressRange()) Standard_OVERRIDE;
   
   Standard_EXPORT virtual Handle(XmlMDF_ADriverTable) AttributeDrivers (const Handle(Message_Messenger)& theMsgDriver);

@@ -72,7 +72,6 @@
 #include <Units.hxx>
 #include <Units_UnitsDictionary.hxx>
 #include <UnitsAPI.hxx>
-#include <UnitsAPI_SystemUnits.hxx>
 
 IMPLEMENT_STANDARD_RTTIEXT(PrsDim_Dimension, AIS_InteractiveObject)
 
@@ -363,6 +362,7 @@ void PrsDim_Dimension::DrawArrow (const Handle(Prs3d_Presentation)& thePresentat
 
   Standard_Real aLength = myDrawer->DimensionAspect()->ArrowAspect()->Length();
   Standard_Real anAngle = myDrawer->DimensionAspect()->ArrowAspect()->Angle();
+  Standard_Boolean isZoomable = myDrawer->DimensionAspect()->ArrowAspect()->IsZoomable();
 
   if (myDrawer->DimensionAspect()->IsArrows3d())
   {
@@ -375,16 +375,17 @@ void PrsDim_Dimension::DrawArrow (const Handle(Prs3d_Presentation)& thePresentat
   }
   else
   {
+    gp_Pnt aLocation = isZoomable ? theLocation : gp::Origin();
     gp_Pnt aLeftPoint (gp::Origin());
     gp_Pnt aRightPoint (gp::Origin());
     const gp_Dir& aPlane = GetPlane().Axis().Direction();
 
-    PointsForArrow (theLocation, theDirection, aPlane, aLength, anAngle, aLeftPoint, aRightPoint);
+    PointsForArrow (aLocation, theDirection, aPlane, aLength, anAngle, aLeftPoint, aRightPoint);
 
     Handle(Graphic3d_ArrayOfTriangles) anArrow = new Graphic3d_ArrayOfTriangles(3);
 
     anArrow->AddVertex (aLeftPoint);
-    anArrow->AddVertex (theLocation);
+    anArrow->AddVertex (aLocation);
     anArrow->AddVertex (aRightPoint);
 
     // Set aspect for arrow triangles
@@ -395,11 +396,15 @@ void PrsDim_Dimension::DrawArrow (const Handle(Prs3d_Presentation)& thePresentat
     Handle(Graphic3d_AspectFillArea3d) aShadingStyle = new Graphic3d_AspectFillArea3d();
     aShadingStyle->SetInteriorStyle (Aspect_IS_SOLID);
     aShadingStyle->SetColor (myDrawer->DimensionAspect()->ArrowAspect()->Aspect()->Color());
-    aShadingStyle->SetShadingModel (Graphic3d_TOSM_UNLIT);
+    aShadingStyle->SetShadingModel (Graphic3d_TypeOfShadingModel_Unlit);
     aShadingStyle->SetPolygonOffset (aPolOffset);
 
     aGroup->SetPrimitivesAspect (aShadingStyle);
     aGroup->AddPrimitiveArray (anArrow);
+    if (!isZoomable)
+    {
+      aGroup->SetTransformPersistence (new Graphic3d_TransformPers (Graphic3d_TMF_ZoomPers, theLocation));
+    }
   }
 
   SelectionGeometry::Arrow& aSensitiveArrow = mySelectionGeom.NewArrow();
@@ -707,10 +712,16 @@ void PrsDim_Dimension::DrawLinearDimension (const Handle(Prs3d_Presentation)& th
 
   aFirstArrowBegin  = aLineBegPoint;
   aSecondArrowBegin = aLineEndPoint;
-  aFirstArrowEnd    = aLineBegPoint.Translated (-gp_Vec (aFirstArrowDir).Scaled (anArrowLength));
-  aSecondArrowEnd   = aLineEndPoint.Translated (-gp_Vec (aSecondArrowDir).Scaled (anArrowLength));
+  aFirstArrowEnd    = aLineBegPoint;
+  aSecondArrowEnd   = aLineEndPoint;
 
-  gp_Pnt aCenterLineBegin = isArrowsExternal 
+  if (aDimensionAspect->ArrowAspect()->IsZoomable())
+  {
+    aFirstArrowEnd.Translate (-gp_Vec (aFirstArrowDir).Scaled (anArrowLength));
+    aSecondArrowEnd.Translate (-gp_Vec (aSecondArrowDir).Scaled (anArrowLength));
+  }
+
+  gp_Pnt aCenterLineBegin = isArrowsExternal
     ? aLineBegPoint : aFirstArrowEnd;
 
   gp_Pnt aCenterLineEnd = isArrowsExternal || theIsOneSide

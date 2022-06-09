@@ -24,10 +24,6 @@
 #include <Standard_OStream.hxx>
 #include <Standard_Integer.hxx>
 class TopoDS_Shape;
-class TopTools_ShapeMapHasher;
-class TopTools_OrientedShapeMapHasher;
-class TopTools_LocationSet;
-class TopTools_ShapeSet;
 
 
 //! The  TopTools package provides   utilities for the
@@ -88,31 +84,6 @@ public:
   //! position.
   Standard_EXPORT static void Dummy (const Standard_Integer I);
 
-
-
-
-protected:
-
-
-
-
-
-private:
-
-
-
-
-friend class TopTools_ShapeMapHasher;
-friend class TopTools_OrientedShapeMapHasher;
-friend class TopTools_LocationSet;
-friend class TopTools_ShapeSet;
-
 };
-
-
-
-
-
-
 
 #endif // _TopTools_HeaderFile

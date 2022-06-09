@@ -17,12 +17,11 @@
 #ifndef _SelectMgr_ViewerSelector_HeaderFile
 #define _SelectMgr_ViewerSelector_HeaderFile
 
-#include <Standard_Transient.hxx>
+#include <Graphic3d_SequenceOfStructure.hxx>
 #include <NCollection_DataMap.hxx>
 #include <OSD_Chronometer.hxx>
-#include <TColStd_SequenceOfInteger.hxx>
-#include <TColStd_HArray1OfInteger.hxx>
 #include <Select3D_BVHBuilder3d.hxx>
+#include <SelectMgr_BVHThreadPool.hxx>
 #include <SelectMgr_IndexedDataMapOfOwnerCriterion.hxx>
 #include <SelectMgr_SelectingVolumeManager.hxx>
 #include <SelectMgr_Selection.hxx>
@@ -31,13 +30,17 @@
 #include <SelectMgr_StateOfSelection.hxx>
 #include <SelectMgr_ToleranceMap.hxx>
 #include <SelectMgr_TypeOfDepthTolerance.hxx>
+#include <SelectMgr_ViewerSelector.hxx>
 #include <Standard_OStream.hxx>
-#include <SelectMgr_BVHThreadPool.hxx>
+#include <Standard_Transient.hxx>
+#include <StdSelect_TypeOfSelectionImage.hxx>
+#include <TColStd_HArray1OfInteger.hxx>
+#include <TColStd_SequenceOfInteger.hxx>
 
-class SelectMgr_SelectionManager;
 class SelectMgr_SensitiveEntitySet;
 class SelectMgr_EntityOwner;
 class Select3D_SensitiveEntity;
+class V3d_View;
 
 // resolve name collisions with X11 headers
 #ifdef Status
@@ -84,8 +87,8 @@ class SelectMgr_ViewerSelector : public Standard_Transient
   friend class SelectMgr_SelectionManager;
 public:
 
-  //! Empties all the tables, removes all selections...
-  Standard_EXPORT void Clear();
+  //! Constructs an empty selector object.
+  Standard_EXPORT SelectMgr_ViewerSelector();
 
   //! Returns custom pixel tolerance value.
   Standard_Integer CustomPixelTolerance() const { return myTolerances.CustomTolerance(); }
@@ -99,8 +102,8 @@ public:
   //! Returns the largest pixel tolerance.
   Standard_Integer PixelTolerance() const { return myTolerances.Tolerance(); }
 
-  //! Sorts the detected entites by priority and distance.
-  Standard_EXPORT virtual void SortResult();
+  //! Sorts the detected entities by priority and distance.
+  Standard_EXPORT virtual void SortResult() const;
 
   //! Returns the picked element with the highest priority,
   //! and which is the closest to the last successful mouse position.
@@ -144,6 +147,9 @@ public:
   //! Clears picking results.
   Standard_EXPORT void ClearPicked();
 
+  //! Empties all the tables, removes all selections...
+  void Clear() { ClearPicked(); }
+
   //! Returns the entity Owner for the object picked at specified position.
   //! @param theRank rank of detected object within range 1...NbPicked()
   Standard_EXPORT Handle(SelectMgr_EntityOwner) Picked (const Standard_Integer theRank) const;
@@ -160,6 +166,9 @@ public:
   //! for the object picked at specified position.
   //! @param theRank rank of detected object within range 1...NbPicked()
   gp_Pnt PickedPoint (const Standard_Integer theRank) const { return PickedData (theRank).Point; }
+
+  //! Remove picked entities associated with specified object.
+  Standard_EXPORT Standard_Boolean RemovePicked (const Handle(SelectMgr_SelectableObject)& theObject);
 
   Standard_EXPORT Standard_Boolean Contains (const Handle(SelectMgr_SelectableObject)& theObject) const;
 
@@ -241,6 +250,57 @@ public:
   //! mark both included and overlapped entities as matched
   Standard_EXPORT void AllowOverlapDetection (const Standard_Boolean theIsToAllow);
 
+public:
+
+  //! Picks the sensitive entity at the pixel coordinates of
+  //! the mouse <theXPix> and <theYPix>. The selector looks for touched areas and owners.
+  Standard_EXPORT void Pick (const Standard_Integer theXPix,
+                             const Standard_Integer theYPix,
+                             const Handle(V3d_View)& theView);
+
+  //! Picks the sensitive entity according to the minimum
+  //! and maximum pixel values <theXPMin>, <theYPMin>, <theXPMax>
+  //! and <theYPMax> defining a 2D area for selection in the 3D view aView.
+  Standard_EXPORT void Pick (const Standard_Integer theXPMin,
+                             const Standard_Integer theYPMin,
+                             const Standard_Integer theXPMax,
+                             const Standard_Integer theYPMax,
+                             const Handle(V3d_View)& theView);
+
+  //! pick action - input pixel values for polyline selection for selection.
+  Standard_EXPORT void Pick (const TColgp_Array1OfPnt2d& thePolyline,
+                             const Handle(V3d_View)& theView);
+
+  //! Picks the sensitive entity according to the input axis.
+  //! This is geometric intersection 3D objects by axis
+  //! (camera parameters are ignored and objects with transform persistance are skipped).
+  Standard_EXPORT void Pick (const gp_Ax1& theAxis,
+                             const Handle(V3d_View)& theView);
+
+  //! Dump of detection results into image.
+  //! This method performs axis picking for each pixel in the image
+  //! and generates a color depending on picking results and selection image type.
+  //! @param theImage       result image, should be initialized
+  //! @param theView        3D view defining camera position
+  //! @param theType        type of image to define
+  //! @param thePickedIndex index of picked entity (1 means topmost)
+  Standard_EXPORT Standard_Boolean ToPixMap (Image_PixMap&                        theImage,
+                                             const Handle(V3d_View)&              theView,
+                                             const StdSelect_TypeOfSelectionImage theType,
+                                             const Standard_Integer               thePickedIndex = 1);
+
+public:
+
+  //! Displays sensitives in view <theView>.
+  Standard_EXPORT void DisplaySensitive (const Handle(V3d_View)& theView);
+
+  Standard_EXPORT void ClearSensitive (const Handle(V3d_View)& theView);
+
+  Standard_EXPORT void DisplaySensitive (const Handle(SelectMgr_Selection)& theSel,
+                                         const gp_Trsf& theTrsf,
+                                         const Handle(V3d_View)& theView,
+                                         const Standard_Boolean theToClearOthers = Standard_True);
+
   //! Dumps the content of me into the stream
   Standard_EXPORT void DumpJson (Standard_OStream& theOStream, Standard_Integer theDepth = -1) const;
 
@@ -263,11 +323,9 @@ public:
 
 protected:
 
-  Standard_EXPORT SelectMgr_ViewerSelector();
-
   //! Traverses BVH containing all added selectable objects and
   //! finds candidates for further search of overlap
-  Standard_EXPORT void TraverseSensitives();
+  Standard_EXPORT void TraverseSensitives (const Standard_Integer theViewId = -1);
 
   //! Internal function that checks if there is possible overlap between some entity of selectable object theObject and
   //! current selecting volume.
@@ -281,14 +339,16 @@ protected:
                                        const Handle(Graphic3d_Camera)& theCamera,
                                        const Graphic3d_Mat4d& theProjectionMat,
                                        const Graphic3d_Mat4d& theWorldViewMat,
-                                       const Standard_Integer theViewportWidth,
-                                       const Standard_Integer theViewportHeight);
+                                       const Graphic3d_Vec2i& theWinSize);
 
   //! Internal function that checks if a particular sensitive
   //! entity theEntity overlaps current selecting volume precisely
   Standard_EXPORT void checkOverlap (const Handle(Select3D_SensitiveEntity)& theEntity,
                                      const gp_GTrsf& theInversedTrsf,
                                      SelectMgr_SelectingVolumeManager& theMgr);
+
+  //! Update z-layers order map.
+  Standard_EXPORT void updateZLayers (const Handle(V3d_View)& theView);
 
 private:
 
@@ -342,9 +402,12 @@ protected:
   Standard_Boolean                              myToPrebuildBVH;
   Handle(SelectMgr_BVHThreadPool)               myBVHThreadPool;
 
-  Handle(TColStd_HArray1OfInteger)             myIndexes;
+  mutable TColStd_Array1OfInteger              myIndexes;
+  mutable Standard_Boolean                     myIsSorted;
   Standard_Boolean                             myIsLeftChildQueuedFirst;
   SelectMgr_MapOfObjectSensitives              myMapOfObjectSensitives;
+
+  Graphic3d_SequenceOfStructure                myStructs; //!< list of debug presentations
 
 };
 

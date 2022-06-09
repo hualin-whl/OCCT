@@ -408,6 +408,17 @@ public:
     *this = Transposed();
   }
 
+  //! Return determinant of the matrix.
+  Element_t Determinant() const
+  {
+    return (GetValue (0, 0) * GetValue (1, 1) * GetValue (2, 2)
+          + GetValue (0, 1) * GetValue (1, 2) * GetValue (2, 0)
+          + GetValue (0, 2) * GetValue (1, 0) * GetValue (2, 1))
+         - (GetValue (0, 2) * GetValue (1, 1) * GetValue (2, 0)
+          + GetValue (0, 0) * GetValue (1, 2) * GetValue (2, 1)
+          + GetValue (0, 1) * GetValue (1, 0) * GetValue (2, 2));
+  }
+
   //! Return adjoint (adjugate matrix, e.g. conjugate transpose).
   Standard_NODISCARD NCollection_Mat3 Adjoint() const
   {
@@ -419,8 +430,8 @@ public:
   }
 
   //! Compute inverted matrix.
-  //! @param theOutMx [out] the inverted matrix
-  //! @param theDet   [out] determinant of matrix
+  //! @param[out] theInv the inverted matrix
+  //! @param[out] theDet determinant of matrix
   //! @return true if reversion success
   bool Inverted (NCollection_Mat3& theInv, Element_t& theDet) const
   {
@@ -436,7 +447,7 @@ public:
   }
 
   //! Compute inverted matrix.
-  //! @param theOutMx [out] the inverted matrix
+  //! @param[out] theInv the inverted matrix
   //! @return true if reversion success
   bool Inverted (NCollection_Mat3& theInv) const
   {

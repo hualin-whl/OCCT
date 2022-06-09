@@ -19,21 +19,9 @@
 #include <gp_Pnt.hxx>
 #include <Graphic3d_ArrayOfPoints.hxx>
 #include <Graphic3d_ArrayOfPrimitives.hxx>
-#include <Graphic3d_AspectFillArea3d.hxx>
-#include <Graphic3d_AspectLine3d.hxx>
-#include <Graphic3d_AspectMarker3d.hxx>
-#include <Graphic3d_AspectText3d.hxx>
-#include <Graphic3d_CStructure.hxx>
 #include <Graphic3d_GroupDefinitionError.hxx>
-#include <Graphic3d_ShaderProgram.hxx>
-#include <Graphic3d_Structure.hxx>
-#include "Graphic3d_Structure.pxx"
 #include <Graphic3d_StructureManager.hxx>
 #include <Graphic3d_Text.hxx>
-#include <Graphic3d_TextureMap.hxx>
-#include <Graphic3d_TransModeFlags.hxx>
-#include <Message.hxx>
-#include <Message_Messenger.hxx>
 #include <NCollection_String.hxx>
 #include <Standard_OutOfRange.hxx>
 #include <Standard_Type.hxx>
@@ -47,9 +35,8 @@ IMPLEMENT_STANDARD_RTTIEXT(Graphic3d_Group,Standard_Transient)
 // purpose  :
 // =======================================================================
 Graphic3d_Group::Graphic3d_Group (const Handle(Graphic3d_Structure)& theStruct)
-: myStructure     (theStruct.operator->()),
-  myIsClosed      (false),
-  myContainsFacet (false)
+: myStructure(theStruct.operator->()),
+  myIsClosed (false)
 {
   //
 }
@@ -77,12 +64,6 @@ void Graphic3d_Group::Clear (Standard_Boolean theUpdateStructureMgr)
 
   myBounds.Clear();
 
-  if (myContainsFacet)
-  {
-    myStructure->GroupsWithFacet (-1);
-    myContainsFacet = false;
-  }
-
   // clear method could be used on Graphic3d_Structure destruction,
   // and its structure manager could be already destroyed, in that
   // case we don't need to update it;
@@ -103,11 +84,6 @@ void Graphic3d_Group::Remove()
     return;
   }
 
-  if (myContainsFacet)
-  {
-    myStructure->GroupsWithFacet (-1);
-    myContainsFacet = false;
-  }
   myStructure->Remove (this);
 
   Update();
@@ -138,6 +114,23 @@ Standard_Boolean Graphic3d_Group::IsEmpty() const
 
   return !myStructure->IsInfinite()
       && !myBounds.IsValid();
+}
+
+// =======================================================================
+// function : SetTransformPersistence
+// purpose  :
+// =======================================================================
+void Graphic3d_Group::SetTransformPersistence (const Handle(Graphic3d_TransformPers)& theTrsfPers)
+{
+  if (myTrsfPers != theTrsfPers)
+  {
+    myTrsfPers = theTrsfPers;
+    if (!IsDeleted()
+     && !theTrsfPers.IsNull())
+    {
+      myStructure->CStructure()->SetGroupTransformPersistence (true);
+    }
+  }
 }
 
 // =======================================================================
@@ -238,19 +231,11 @@ void Graphic3d_Group::AddPrimitiveArray (const Graphic3d_TypeOfPrimitiveArray th
                                          const Handle(Graphic3d_BoundBuffer)& ,
                                          const Standard_Boolean               theToEvalMinMax)
 {
+  (void )theType;
   if (IsDeleted()
    || theAttribs.IsNull())
   {
     return;
-  }
-
-  if (!myContainsFacet
-    && theType != Graphic3d_TOPA_POLYLINES
-    && theType != Graphic3d_TOPA_SEGMENTS
-    && theType != Graphic3d_TOPA_POINTS)
-  {
-    myStructure->GroupsWithFacet (1);
-    myContainsFacet = true;
   }
 
   if (!theToEvalMinMax)
@@ -458,9 +443,10 @@ void Graphic3d_Group::DumpJson (Standard_OStream& theOStream, Standard_Integer t
 
   OCCT_DUMP_FIELD_VALUE_POINTER (theOStream, this)
 
+  OCCT_DUMP_FIELD_VALUES_DUMPED (theOStream, theDepth, myTrsfPers.get())
+
   OCCT_DUMP_FIELD_VALUE_POINTER (theOStream, myStructure)
   OCCT_DUMP_FIELD_VALUES_DUMPED (theOStream, theDepth, &myBounds)
 
   OCCT_DUMP_FIELD_VALUE_NUMERICAL (theOStream, myIsClosed)
-  OCCT_DUMP_FIELD_VALUE_NUMERICAL (theOStream, myContainsFacet)
 }

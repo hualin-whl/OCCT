@@ -28,6 +28,7 @@ struct EmscriptenWheelEvent;
 struct EmscriptenTouchEvent;
 struct EmscriptenKeyboardEvent;
 struct EmscriptenUiEvent;
+struct EmscriptenFocusEvent;
 
 //! This class defines WebAssembly window (HTML5 canvas) intended for creation of OpenGL (WebGL) context.
 //!
@@ -119,6 +120,9 @@ public:
   //! Return device pixel ratio (logical to backing store scale factor).
   virtual Standard_Real DevicePixelRatio() const Standard_OVERRIDE { return myDevicePixelRatio; }
 
+  //! Sets device pixel ratio for a window with IsVirtual() flag.
+  void SetDevicePixelRatio (Standard_Real theDevicePixelRatio) { myDevicePixelRatio = theDevicePixelRatio; }
+
   //! Invalidate entire window content through generation of Expose event.
   Standard_EXPORT virtual void InvalidateContent (const Handle(Aspect_DisplayConnection)& theDisp) Standard_OVERRIDE;
 
@@ -171,6 +175,14 @@ public:
   //! @return TRUE if message has been processed
   Standard_EXPORT virtual bool ProcessUiEvent (Aspect_WindowInputListener& theListener,
                                                int theEventType, const EmscriptenUiEvent* theEvent);
+
+  //! Process a focus input change message.
+  //! @param[in,out] theListener listener to redirect message
+  //! @param[in] theEventType message type to process
+  //! @param[in] theEvent message to process
+  //! @return TRUE if message has been processed
+  Standard_EXPORT virtual bool ProcessFocusEvent (Aspect_WindowInputListener& theListener,
+                                                  int theEventType, const EmscriptenFocusEvent* theEvent);
 
 protected:
 

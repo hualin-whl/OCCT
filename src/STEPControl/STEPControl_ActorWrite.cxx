@@ -19,6 +19,7 @@
 
 #include <BRep_Builder.hxx>
 #include <BRep_Tool.hxx>
+#include <BRep_TEdge.hxx>
 #include <BRepTools_Modifier.hxx>
 #include <Geom_Curve.hxx>
 #include <Geom_Line.hxx>
@@ -45,6 +46,7 @@
 #include <STEPConstruct_UnitContext.hxx>
 #include <STEPControl_ActorWrite.hxx>
 #include <STEPControl_StepModelType.hxx>
+#include <StepData_GlobalFactors.hxx>
 #include <StepData_StepModel.hxx>
 #include <StepGeom_Axis2Placement3d.hxx>
 #include <StepGeom_GeomRepContextAndGlobUnitAssCtxAndGlobUncertaintyAssCtx.hxx>
@@ -70,6 +72,9 @@
 #include <StepShape_ShellBasedSurfaceModel.hxx>
 #include <StepShape_TopologicalRepresentationItem.hxx>
 #include <StepShape_VertexPoint.hxx>
+#include <StepVisual_TessellatedItem.hxx>
+#include <StepVisual_TessellatedShapeRepresentation.hxx>
+#include <StepVisual_TessellatedSolid.hxx>
 #include <TCollection_HAsciiString.hxx>
 #include <TColStd_HSequenceOfTransient.hxx>
 #include <TopExp.hxx>
@@ -80,7 +85,6 @@
 #include <TopoDS_Shape.hxx>
 #include <TopoDS_Solid.hxx>
 #include <TopoDSToStep.hxx>
-#include <TopoDSToStep_Builder.hxx>
 #include <TopoDSToStep_FacetedTool.hxx>
 #include <TopoDSToStep_MakeBrepWithVoids.hxx>
 #include <TopoDSToStep_MakeFacetedBrep.hxx>
@@ -169,6 +173,58 @@ static void DumpWhatIs(const TopoDS_Shape& S) {
 }
 #endif
 
+static Standard_Boolean hasGeometry(const TopoDS_Shape& theShape)
+{
+  TopAbs_ShapeEnum aType = theShape.ShapeType();
+
+  if (aType == TopAbs_VERTEX) 
+  {
+    return Standard_True;
+  }
+  else if (aType == TopAbs_EDGE) 
+  {
+    Handle(BRep_TEdge) TE = Handle(BRep_TEdge)::DownCast(theShape.TShape());
+    BRep_ListIteratorOfListOfCurveRepresentation itrc(TE->Curves());
+
+    while (itrc.More()) 
+    {
+      const Handle(BRep_CurveRepresentation)& CR = itrc.Value();
+      Standard_Boolean aHasGeometry = (CR->IsCurve3D() && !CR->Curve3D().IsNull())
+                                    || CR->IsCurveOnSurface()
+                                    || CR->IsRegularity()
+                                    || (CR->IsPolygon3D() && !CR->Polygon3D().IsNull())
+                                    || CR->IsPolygonOnTriangulation()
+                                    || CR->IsPolygonOnSurface();
+      if (!aHasGeometry)
+        return Standard_False;
+      itrc.Next();
+    }
+    return Standard_True;
+  }
+  else if (aType == TopAbs_FACE) 
+  {
+    Handle(BRep_TFace) TF = Handle(BRep_TFace)::DownCast(theShape.TShape());
+    if (!TF->Surface().IsNull()) 
+    {
+      return Standard_True;
+    }
+  }
+  else 
+  {
+    TopoDS_Iterator anIt(theShape, Standard_False, Standard_False);
+    for (; anIt.More(); anIt.Next()) 
+    {
+      const TopoDS_Shape& aShape = anIt.Value();
+      Standard_Boolean aHasGeometry = hasGeometry(aShape);
+      if (!aHasGeometry)
+        return Standard_False;
+    }
+    return Standard_True;
+  }
+
+  return Standard_False;
+}
+
 //=======================================================================
 // Function : IsManifoldShape
 // Purpose  : Used to define whether the passed shape has manifold
@@ -231,7 +287,7 @@ static Standard_Boolean IsManifoldShape(const TopoDS_Shape& theShape) {
 STEPControl_ActorWrite::STEPControl_ActorWrite ()
 : mygroup (0) , mytoler (-1.)
 {  
-  SetMode(STEPControl_ShellBasedSurfaceModel);  
+  SetMode(STEPControl_ShellBasedSurfaceModel);
 }
 
 //=======================================================================
@@ -450,8 +506,6 @@ Handle(Transfer_Binder) STEPControl_ActorWrite::Transfer (const Handle(Transfer_
                                                           const Handle(Transfer_FinderProcess)& FP,
                                                           const Message_ProgressRange& theProgress)
 {
-  XSAlgo::AlgoContainer()->PrepareForTransfer();
-    
   Handle(TransferBRep_ShapeMapper) mapper = Handle(TransferBRep_ShapeMapper)::DownCast(start);
 
   if (mapper.IsNull()) return NullResult();
@@ -462,12 +516,15 @@ Handle(Transfer_Binder) STEPControl_ActorWrite::Transfer (const Handle(Transfer_
   if ( ! model.IsNull() ) myContext.SetModel ( model ); //: abv 04.11.00: take APD from model
   myContext.AddAPD ( Standard_False ); // update APD
   myContext.SetLevel ( 1 ); // set assembly level to 1 (to ensure)
-  
-  //:S4136: init UnitsMethods to reset angle unit factors (see TopoDSToStep)
-  Standard_Real lFactor = UnitsMethods::GetLengthFactorValue ( Interface_Static::IVal ( "write.step.unit" ) );
-  lFactor /= UnitsMethods::GetCasCadeLengthUnit();
+  if (!model->IsInitializedUnit())
+  {
+    XSAlgo::AlgoContainer()->PrepareForTransfer(); // update unit info
+    model->SetLocalLengthUnit(UnitsMethods::GetCasCadeLengthUnit());
+  }
+  Standard_Real aLFactor = model->WriteLengthUnit();
+  aLFactor /= model->LocalLengthUnit();
   Standard_Integer anglemode = Interface_Static::IVal("step.angleunit.mode");
-  UnitsMethods::InitializeFactors ( lFactor, ( anglemode <= 1 ? 1. : M_PI/180. ), 1. );
+  StepData_GlobalFactors::Intance().InitializeFactors (aLFactor, ( anglemode <= 1 ? 1. : M_PI/180. ), 1. );
 
   // create SDR
   STEPConstruct_Part SDRTool;
@@ -904,25 +961,30 @@ Handle(Transfer_Binder) STEPControl_ActorWrite::TransferShape
 //    BRepTools_Modifier DMT(aShape,DM);
 //    if ( DMT.IsDone() ) aShape = DMT.ModifiedShape ( aShape );
 ////    aShape = TopoDSToStep::DirectFaces(xShape);
+    Message_ProgressScope aPS1(aPS.Next(), NULL, 2);
+
+    TopoDS_Shape aShape = xShape;
     Handle(Standard_Transient) info;
-    Standard_Real maxTol = Interface_Static::RVal("read.maxprecision.val");
 
-    Message_ProgressScope aPS1 (aPS.Next(), NULL, 2);
+    if (hasGeometry(aShape)) 
+    {
+      Standard_Real maxTol = Interface_Static::RVal("read.maxprecision.val");
 
-    TopoDS_Shape aShape;
-    aShape = XSAlgo::AlgoContainer()->ProcessShape(xShape, Tol, maxTol, 
-                                                  "write.step.resource.name", 
-                                                  "write.step.sequence", info,
-                                                  aPS1.Next());
-    if (aPS1.UserBreak())
-      return Handle(Transfer_Binder)();
+      aShape = XSAlgo::AlgoContainer()->ProcessShape(xShape, Tol, maxTol,
+        "write.step.resource.name",
+        "write.step.sequence", info,
+        aPS1.Next());
+      if (aPS1.UserBreak())
+        return Handle(Transfer_Binder)();
+    }
 
-    if (!isManifold) {
+    if (!isManifold) 
+    {
       mergeInfoForNM(FP, info);
     }
 
     // create a STEP entity corresponding to shape
-    Handle(StepGeom_GeometricRepresentationItem) item;
+    Handle(StepGeom_GeometricRepresentationItem) item, itemTess;
     switch (trmode)
       {
       case STEPControl_ManifoldSolidBrep:
@@ -938,28 +1000,33 @@ Handle(Transfer_Binder) STEPControl_ActorWrite::TransferShape
 	    if ( nbShells >1 ) {
 	      TopoDSToStep_MakeBrepWithVoids MkBRepWithVoids(aSolid,FP, aPS1.Next());
 	      MkBRepWithVoids.Tolerance() = Tol;
-	      if (MkBRepWithVoids.IsDone()) {
+	      if (MkBRepWithVoids.IsDone()) 
+              {
 		item = MkBRepWithVoids.Value();
-	      }
-	      else nbShells = 1; //smth went wrong; let it will be just Manifold
+                itemTess = MkBRepWithVoids.TessellatedValue();
+              }
+              else nbShells = 1; //smth went wrong; let it will be just Manifold
 	    }
 	    if ( nbShells ==1 ) {
-
-	      TopoDSToStep_MakeManifoldSolidBrep MkManifoldSolidBrep(aSolid,FP, aPS1.Next());
+              TopoDSToStep_MakeManifoldSolidBrep MkManifoldSolidBrep(aSolid,FP, aPS1.Next());
 	      MkManifoldSolidBrep.Tolerance() = Tol;
-	      if (MkManifoldSolidBrep.IsDone()) {
+	      if (MkManifoldSolidBrep.IsDone()) 
+              {
 		item = MkManifoldSolidBrep.Value();
-	      }
-	    }
+                itemTess = MkManifoldSolidBrep.TessellatedValue();
+              }
+            }
 	  }
 	  else if (aShape.ShapeType() == TopAbs_SHELL) {
 	    TopoDS_Shell aShell = TopoDS::Shell(aShape);
 	    TopoDSToStep_MakeManifoldSolidBrep MkManifoldSolidBrep(aShell,FP, aPS1.Next());
 	    MkManifoldSolidBrep.Tolerance() = Tol;
-	    if (MkManifoldSolidBrep.IsDone()) {
+	    if (MkManifoldSolidBrep.IsDone()) 
+            {
 	      item = MkManifoldSolidBrep.Value();
-	    }
-	  }
+              itemTess = MkManifoldSolidBrep.TessellatedValue();
+            }
+          }
 	  break;
 	}
       case STEPControl_BrepWithVoids:
@@ -968,8 +1035,10 @@ Handle(Transfer_Binder) STEPControl_ActorWrite::TransferShape
 	    TopoDS_Solid aSolid = TopoDS::Solid(aShape);
 	    TopoDSToStep_MakeBrepWithVoids MkBRepWithVoids(aSolid,FP, aPS1.Next());
 	    MkBRepWithVoids.Tolerance() = Tol;
-	    if (MkBRepWithVoids.IsDone()) {
+	    if (MkBRepWithVoids.IsDone()) 
+            {
 	      item = MkBRepWithVoids.Value();
+              itemTess = MkBRepWithVoids.TessellatedValue();
 	    }
 	  }
 	  break;
@@ -991,9 +1060,11 @@ Handle(Transfer_Binder) STEPControl_ActorWrite::TransferShape
 	    TopoDS_Solid aSolid = TopoDS::Solid(aShape);
 	    TopoDSToStep_MakeFacetedBrep MkFacetedBrep(aSolid,FP, aPS1.Next());
 	    MkFacetedBrep.Tolerance() = Tol;
-	    if (MkFacetedBrep.IsDone()) {
+	    if (MkFacetedBrep.IsDone()) 
+            {
 	      item = MkFacetedBrep.Value();
-	    }
+              itemTess = MkFacetedBrep.TessellatedValue();
+            }
 	  }
 	  break;
 	}
@@ -1015,9 +1086,11 @@ Handle(Transfer_Binder) STEPControl_ActorWrite::TransferShape
 	    TopoDSToStep_MakeFacetedBrepAndBrepWithVoids 
 	      MkFacetedBrepAndBrepWithVoids(aSolid,FP, aPS1.Next());
 	    MkFacetedBrepAndBrepWithVoids.Tolerance() = Tol;
-	    if (MkFacetedBrepAndBrepWithVoids.IsDone()) {
+	    if (MkFacetedBrepAndBrepWithVoids.IsDone()) 
+            {
 	      item = MkFacetedBrepAndBrepWithVoids.Value();
-	    }
+              itemTess = MkFacetedBrepAndBrepWithVoids.TessellatedValue();
+            }
 	  }
 	  break;
 	}
@@ -1028,28 +1101,34 @@ Handle(Transfer_Binder) STEPControl_ActorWrite::TransferShape
 	    TopoDSToStep_MakeShellBasedSurfaceModel
 	      MkShellBasedSurfaceModel(aSolid, FP, aPS1.Next());
 	    MkShellBasedSurfaceModel.Tolerance() = Tol;
-	    if (MkShellBasedSurfaceModel.IsDone()) {
+	    if (MkShellBasedSurfaceModel.IsDone()) 
+            {
 	      item = MkShellBasedSurfaceModel.Value();
-	    }
+              itemTess = MkShellBasedSurfaceModel.TessellatedValue();
+           }
 	  }
 	  else if (aShape.ShapeType() == TopAbs_SHELL) {
             TopoDS_Shell aShell = TopoDS::Shell(aShape);
             // Non-manifold topology is stored via NMSSR containing series of SBSM (ssv; 13.11.2010)
             TopoDSToStep_MakeShellBasedSurfaceModel MkShellBasedSurfaceModel(aShell, FP, aPS1.Next());
             MkShellBasedSurfaceModel.Tolerance() = Tol;
-            if (MkShellBasedSurfaceModel.IsDone()) {
+            if (MkShellBasedSurfaceModel.IsDone()) 
+            {
               item = MkShellBasedSurfaceModel.Value();
+              itemTess = MkShellBasedSurfaceModel.TessellatedValue();
             }
 	  }
 	  else if (aShape.ShapeType() == TopAbs_FACE) {
 	    TopoDS_Face aFace = TopoDS::Face(aShape);
-	    TopoDSToStep_MakeShellBasedSurfaceModel
+            TopoDSToStep_MakeShellBasedSurfaceModel
 	      MkShellBasedSurfaceModel(aFace, FP, aPS1.Next());
 	    MkShellBasedSurfaceModel.Tolerance() = Tol;
-	    if (MkShellBasedSurfaceModel.IsDone()) {
+	    if (MkShellBasedSurfaceModel.IsDone()) 
+            {
 	      item = MkShellBasedSurfaceModel.Value();
-	    }
-	  }
+              itemTess = MkShellBasedSurfaceModel.TessellatedValue();
+            }
+          }
 	  break;
 	}
       case STEPControl_GeometricCurveSet:
@@ -1097,24 +1176,48 @@ Handle(Transfer_Binder) STEPControl_ActorWrite::TransferShape
 	}
       default: break;
       }
-    if ( item.IsNull() ) continue;
+    if ( item.IsNull() && itemTess.IsNull() ) continue;
 
     // add resulting item to the FP
-    ItemSeq->Append(item);
-    Handle(TransferBRep_ShapeMapper) submapper;
-    if ( xShape.IsSame ( mapper->Value() ) ) 
-      submapper = Handle(TransferBRep_ShapeMapper)::DownCast ( start );
-    if ( submapper.IsNull() ) submapper = TransferBRep::ShapeMapper (FP,xShape);
-    Handle(Transfer_Binder) subbind = FP->Find ( submapper );
-    if ( subbind.IsNull() ) {
-      subbind = TransientResult ( item );
-      FP->Bind ( submapper, subbind );
+    if (!item.IsNull()) 
+    {
+      ItemSeq->Append(item);
+      Handle(TransferBRep_ShapeMapper) submapper;
+      if (xShape.IsSame(mapper->Value()))
+        submapper = Handle(TransferBRep_ShapeMapper)::DownCast(start);
+      if (submapper.IsNull()) 
+        submapper = TransferBRep::ShapeMapper(FP, xShape);
+      Handle(Transfer_Binder) subbind = FP->Find(submapper);
+      if (subbind.IsNull()) 
+      {
+        subbind = TransientResult(item);
+        FP->Bind(submapper, subbind);
+      }
+      else 
+        subbind->AddResult(TransientResult(item));
     }
-    else subbind->AddResult ( TransientResult ( item ) );
+    if (!itemTess.IsNull()) 
+    {
+      ItemSeq->Append(itemTess);
+      Handle(TransferBRep_ShapeMapper) submapper;
+      if (xShape.IsSame(mapper->Value()))
+        submapper = Handle(TransferBRep_ShapeMapper)::DownCast(start);
+      if (submapper.IsNull()) 
+        submapper = TransferBRep::ShapeMapper(FP, xShape);
+      Handle(Transfer_Binder) subbind = FP->Find(submapper);
+      if (subbind.IsNull()) 
+      {
+        subbind = TransientResult(itemTess);
+        FP->Bind(submapper, subbind);
+      }
+      else 
+        subbind->AddResult(TransientResult(itemTess));
+    }
 
     //:abv 24Jan99 CAX-IF TRJ3: Update FinderProcess map to take into account shape processing
 //    UpdateMap ( xShape, CSMT, DMT, FP );
-    XSAlgo::AlgoContainer()->MergeTransferInfo(FP, info);
+    if (!info.IsNull())
+      XSAlgo::AlgoContainer()->MergeTransferInfo(FP, info);
   }
   
   // - Make Shape Representation 
@@ -1210,6 +1313,8 @@ Handle(Transfer_Binder) STEPControl_ActorWrite::TransferShape
         ShapeRepr1 = new StepShape_GeometricallyBoundedWireframeShapeRepresentation;
       else if (items->Value(j)->IsKind(STANDARD_TYPE(StepShape_FacetedBrep)))
         ShapeRepr1 = new StepShape_FacetedBrepShapeRepresentation;
+      else if (items->Value(j)->IsKind(STANDARD_TYPE(StepVisual_TessellatedItem)))
+        ShapeRepr1 = new StepVisual_TessellatedShapeRepresentation;
       else ShapeRepr1 = new StepShape_ShapeRepresentation;
       
       Handle(StepRepr_HArray1OfRepresentationItem) repr1 = new StepRepr_HArray1OfRepresentationItem(1,2);
@@ -1233,6 +1338,33 @@ Handle(Transfer_Binder) STEPControl_ActorWrite::TransferShape
     }
   }
   else {
+    Standard_Integer nC = 0;
+    for (Standard_Integer i = 1; i <= items->Length(); i++) 
+    {
+      if (!items->Value(i)->IsKind(STANDARD_TYPE(StepVisual_TessellatedItem)))
+        continue;
+      ++nC;
+    }
+    if (nC > 0)
+    {
+      Handle(StepRepr_HArray1OfRepresentationItem) itemsTess = new StepRepr_HArray1OfRepresentationItem(1, nC);
+      Standard_Integer i = 1;
+      for (Standard_Integer j = 1; j <= items->Length(); j++) 
+      {
+        if (!items->Value(j)->IsKind(STANDARD_TYPE(StepVisual_TessellatedItem)))
+          continue;
+        itemsTess->SetValue(i++, items->Value(j));
+      }
+
+      Handle(StepShape_ShapeRepresentation) shapeTessRepr = new StepVisual_TessellatedShapeRepresentation;
+      shapeTessRepr->SetItems(itemsTess);
+      STEPConstruct_UnitContext mk1;
+      mk1.Init(Tol);
+      shapeTessRepr->SetContextOfItems(mk1.Value());
+      shapeTessRepr->SetName(new TCollection_HAsciiString(""));
+
+      aSeqBindRelation.Append(TransientResult(shapeTessRepr));
+    }
     if (!useExistingNMSSR)
       shapeRep->SetItems(items);
     else {
@@ -1276,7 +1408,7 @@ Handle(Transfer_Binder) STEPControl_ActorWrite::TransferShape
     return resbind;
   } else return FP->Find(start);
 
-}
+  }
 
 //=======================================================================
 //function : TransferCompound
@@ -1381,11 +1513,7 @@ Handle(Transfer_Binder) STEPControl_ActorWrite::TransferCompound
       Handle(Transfer_SimpleBinderOfTransient) bx = 
         Handle(Transfer_SimpleBinderOfTransient)::DownCast(bnd);
       if ( !bx.IsNull() ) {
-        // Single SDR is created for a non-manifold group (ssv: 12.11.2010)
-        if (!isManifold && i > 1)
-          break;
-        else
-          binder->AddResult( TransientResult( bx->Result() ) );
+        binder->AddResult( TransientResult( bx->Result() ) );
       }
       bnd = bnd->NextResult();
     }
@@ -1464,15 +1592,16 @@ Handle(Transfer_Binder)  STEPControl_ActorWrite::TransferSubShape
   // if shape itself not yet translated, do it now
   //:abv 20.05.02: see comment in TransferShape(): added "! iasdr ||"
   Handle(Transfer_Binder) resprod = TransientResult(sdr);  //KA - OCC7141(skl 10.11.2004)
+  bool isJustTransferred = false;
   if ( ! iasdr || resbind.IsNull() ) {
-    resbind = TransferShape(mapper, sdr, FP, shapeGroup, isManifold, theProgress);
+    Handle(Transfer_Binder) resbind1 = TransferShape(mapper, sdr, FP, shapeGroup, isManifold, theProgress);
+    if (resbind1.IsNull() || sdr->UsedRepresentation().IsNull())
+      return Handle(Transfer_Binder)();
+    resbind = resbind1;
     Handle(Transfer_Binder) oldbind = FP->Find ( mapper );
     if ( ! oldbind.IsNull() && !resbind.IsNull()) resbind->AddResult ( oldbind );
-    FP->Bind (mapper,resbind);
-    resprod=resbind; //KA - OCC7141(skl 10.11.2004)
+    isJustTransferred = true;
   }
-  if (resprod.IsNull())
-    return resprod;
 
   // A new resbind may have been produced
 //  DeclareAndCast(Transfer_SimpleBinderOfTransient,restrans,resbind);
@@ -1496,20 +1625,28 @@ Handle(Transfer_Binder)  STEPControl_ActorWrite::TransferSubShape
   //KA: we need only the current subshape in resprod, since the binder is copied
   //    in Transfershape which calls Transfersubshape   [ OCC7141(skl 10.11.2004) ]
   if ( ! iasdr ) {
-    resprod->AddResult ( TransientResult ( SDRTool.SDRValue() ) );
-    resbind->AddResult ( TransientResult ( SDRTool.SDRValue() ) ); //KA - OCC7141(skl 10.11.2004)
+    resprod->AddResult (TransientResult (sdr));
+    if (resprod != resbind)
+      resbind->AddResult (TransientResult (sdr)); //KA - OCC7141(skl 10.11.2004)
     roots->Append ( myContext.GetRootsForPart ( SDRTool ) );
   }
   for ( Standard_Integer i=1; i <= roots->Length(); i++ ) {
     resprod->AddResult ( TransientResult ( roots->Value(i) ) );
-    resbind->AddResult ( TransientResult ( roots->Value(i) ) );  //KA - OCC7141(skl 10.11.2004)
+    if (resprod != resbind)
+      resbind->AddResult (TransientResult (roots->Value(i)));  //KA - OCC7141(skl 10.11.2004)
   }
+  if (isJustTransferred)
+  {
+    // We make CDSR of the current shape preceding CDSR of any subshapes,
+    // therefore add resbind at the end.
+    resprod->AddResult (resbind);
+    FP->Bind (mapper, resprod);
+  }
+
   myContext.NextIndex();
 
-  //FP->Bind (mapper,resprod); //KA - OCC7141(skl 10.11.2004)
-
   // abv 16.10.00: bind CDSR (et al) to located shape in order to be able to track instances
-  if ( mapper != start ) {
+  if (mapper != start && aLoc.Form() != gp_Identity) {
     Handle(Transfer_Binder) bnd = FP->Find ( start );
     for ( Standard_Integer j=1; j <= roots->Length(); j++ ) 
       if ( bnd.IsNull() ) bnd = TransientResult ( roots->Value(j) );

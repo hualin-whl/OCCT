@@ -47,6 +47,7 @@
 #include <StepBasic_SiUnitAndLengthUnit.hxx>
 #include <StepBasic_Unit.hxx>
 #include <StepBasic_DocumentFile.hxx>
+#include <StepData_GlobalFactors.hxx>
 #include <STEPCAFControl_Controller.hxx>
 #include <STEPCAFControl_DataMapIteratorOfDataMapOfShapePD.hxx>
 #include <STEPCAFControl_DataMapOfPDExternFile.hxx>
@@ -203,6 +204,7 @@
 #include <StepVisual_PlanarBox.hxx>
 #include <StepVisual_PresentationLayerAssignment.hxx>
 #include <StepVisual_PresentationStyleByContext.hxx>
+#include <StepVisual_RepositionedTessellatedGeometricSet.hxx>
 #include <StepVisual_StyleContextSelect.hxx>
 #include <StepVisual_StyledItem.hxx>
 #include <StepVisual_ViewVolume.hxx>
@@ -373,6 +375,7 @@ void STEPCAFControl_Reader::Init(const Handle(XSControl_WorkSession)& WS,
   // necessary only in Writer, to set good actor:  WS->SelectNorm ( "STEP" );
   myReader.SetWS(WS, scratch);
   myFiles.Clear();
+  myMap.Clear();
 }
 
 //=======================================================================
@@ -535,6 +538,23 @@ static void FillShapesMap(const TopoDS_Shape &S, TopTools_MapOfShape &map)
     FillShapesMap(it.Value(), map);
 }
 
+//=======================================================================
+//function : prepareUnits
+//purpose  :
+//=======================================================================
+void STEPCAFControl_Reader::prepareUnits(const Handle(StepData_StepModel)& theModel,
+                                         const Handle(TDocStd_Document)& theDoc) const
+{
+  Standard_Real aScaleFactorMM = 1.;
+  if (!XCAFDoc_DocumentTool::GetLengthUnit(theDoc, aScaleFactorMM, UnitsMethods_LengthUnit_Millimeter))
+  {
+    XSAlgo::AlgoContainer()->PrepareForTransfer(); // update unit info
+    aScaleFactorMM = UnitsMethods::GetCasCadeLengthUnit();
+    // Sets length unit to the document
+    XCAFDoc_DocumentTool::SetLengthUnit(theDoc, aScaleFactorMM, UnitsMethods_LengthUnit_Millimeter);
+  }
+  theModel->SetLocalLengthUnit(aScaleFactorMM);
+}
 
 //=======================================================================
 //function : Transfer
@@ -549,6 +569,8 @@ Standard_Boolean STEPCAFControl_Reader::Transfer (STEPControl_Reader &reader,
                                                   const Message_ProgressRange& theProgress)
 {
   reader.ClearShapes();
+  Handle(StepData_StepModel) aModel = Handle(StepData_StepModel)::DownCast(reader.Model());
+  prepareUnits(aModel, doc);
   Standard_Integer i;
 
   // Read all shapes
@@ -582,14 +604,13 @@ Standard_Boolean STEPCAFControl_Reader::Transfer (STEPControl_Reader &reader,
   // from the ones representing hybrid models and shape sets
   STEPCAFControl_DataMapOfShapePD ShapePDMap;
   STEPCAFControl_DataMapOfPDExternFile PDFileMap;
-  Handle(Interface_InterfaceModel) Model = reader.Model();
   const Handle(Transfer_TransientProcess) &TP = reader.WS()->TransferReader()->TransientProcess();
-  Standard_Integer nb = Model->NbEntities();
+  Standard_Integer nb = aModel->NbEntities();
 
   Handle(TColStd_HSequenceOfTransient) SeqPDS = new TColStd_HSequenceOfTransient;
 
   for (i = 1; i <= nb; i++) {
-    Handle(Standard_Transient) enti = Model->Value(i);
+    Handle(Standard_Transient) enti = aModel->Value(i);
     if (enti->IsKind(STANDARD_TYPE(StepRepr_ProductDefinitionShape))) {
       // sequence for acceleration ReadMaterials
       SeqPDS->Append(enti);
@@ -705,26 +726,25 @@ Standard_Boolean STEPCAFControl_Reader::Transfer (STEPControl_Reader &reader,
   // and insert them to the document
   Handle(XCAFDoc_ShapeTool) STool = XCAFDoc_DocumentTool::ShapeTool(doc->Main());
   if (STool.IsNull()) return Standard_False;
-  XCAFDoc_DataMapOfShapeLabel map;
   if (asOne)
-    Lseq.Append(AddShape(reader.OneShape(), STool, NewShapesMap, ShapePDMap, PDFileMap, map));
+    Lseq.Append(AddShape(reader.OneShape(), STool, NewShapesMap, ShapePDMap, PDFileMap));
   else {
     for (i = 1; i <= num; i++) {
-      Lseq.Append(AddShape(reader.Shape(i), STool, NewShapesMap, ShapePDMap, PDFileMap, map));
+      Lseq.Append(AddShape(reader.Shape(i), STool, NewShapesMap, ShapePDMap, PDFileMap));
     }
   }
 
   // read colors
   if (GetColorMode())
-    ReadColors(reader.WS(), doc, map);
+    ReadColors(reader.WS(), doc);
 
   // read names
   if (GetNameMode())
-    ReadNames(reader.WS(), doc, PDFileMap, map);
+    ReadNames(reader.WS(), doc, PDFileMap);
 
   // read validation props
   if (GetPropsMode())
-    ReadValProps(reader.WS(), doc, PDFileMap, map);
+    ReadValProps(reader.WS(), doc, PDFileMap);
 
   // read layers
   if (GetLayerMode())
@@ -732,7 +752,7 @@ Standard_Boolean STEPCAFControl_Reader::Transfer (STEPControl_Reader &reader,
 
   // read SHUO entities from STEP model
   if (GetSHUOMode())
-    ReadSHUOs(reader.WS(), doc, PDFileMap, map);
+    ReadSHUOs(reader.WS(), doc, PDFileMap);
 
   // read GDT entities from STEP model
   if (GetGDTMode())
@@ -748,11 +768,10 @@ Standard_Boolean STEPCAFControl_Reader::Transfer (STEPControl_Reader &reader,
 
   // Expand resulting CAF structure for sub-shapes (optionally with their
   // names) if requested
-  ExpandSubShapes(STool, map, ShapePDMap);
+  ExpandSubShapes(STool, ShapePDMap);
 
   // Update assembly compounds
   STool->UpdateAssemblies();
-
   return Standard_True;
 }
 
@@ -765,12 +784,11 @@ TDF_Label STEPCAFControl_Reader::AddShape(const TopoDS_Shape &S,
   const Handle(XCAFDoc_ShapeTool) &STool,
   const TopTools_MapOfShape &NewShapesMap,
   const STEPCAFControl_DataMapOfShapePD &ShapePDMap,
-  const STEPCAFControl_DataMapOfPDExternFile &PDFileMap,
-  XCAFDoc_DataMapOfShapeLabel &ShapeLabelMap) const
+  const STEPCAFControl_DataMapOfPDExternFile &PDFileMap)
 {
   // if shape has already been mapped, just return corresponding label
-  if (ShapeLabelMap.IsBound(S)) {
-    return ShapeLabelMap.Find(S);
+  if (myMap.IsBound(S)) {
+    return myMap.Find(S);
   }
 
   // if shape is located, create instance
@@ -778,16 +796,16 @@ TDF_Label STEPCAFControl_Reader::AddShape(const TopoDS_Shape &S,
     TopoDS_Shape S0 = S;
     TopLoc_Location loc;
     S0.Location(loc);
-    AddShape(S0, STool, NewShapesMap, ShapePDMap, PDFileMap, ShapeLabelMap);
+    AddShape(S0, STool, NewShapesMap, ShapePDMap, PDFileMap);
     TDF_Label L = STool->AddShape(S, Standard_False); // should create reference
-    ShapeLabelMap.Bind(S, L);
+    myMap.Bind(S, L);
     return L;
   }
 
   // if shape is not compound, simple add it
   if (S.ShapeType() != TopAbs_COMPOUND) {
     TDF_Label L = STool->AddShape(S, Standard_False);
-    ShapeLabelMap.Bind(S, L);
+    myMap.Bind(S, L);
     return L;
   }
 
@@ -815,7 +833,7 @@ TDF_Label STEPCAFControl_Reader::AddShape(const TopoDS_Shape &S,
       if (!EF->GetLabel().IsNull()) {
         // but if components >0, ignore extern ref!
         if (nbComponents <= 0) {
-          ShapeLabelMap.Bind(S, EF->GetLabel());
+          myMap.Bind(S, EF->GetLabel());
           STool->SetExternRefs(EF->GetLabel(), SHAS);
           return EF->GetLabel();
         }
@@ -833,7 +851,7 @@ TDF_Label STEPCAFControl_Reader::AddShape(const TopoDS_Shape &S,
   if (!isAssembly) {
     TDF_Label L = STool->AddShape(S, Standard_False);
     if (SHAS.Length() > 0) STool->SetExternRefs(L, SHAS);
-    ShapeLabelMap.Bind(S, L);
+    myMap.Bind(S, L);
     return L;
   }
 
@@ -844,16 +862,16 @@ TDF_Label STEPCAFControl_Reader::AddShape(const TopoDS_Shape &S,
     TopoDS_Shape Sub0 = it.Value();
     TopLoc_Location loc;
     Sub0.Location(loc);
-    TDF_Label subL = AddShape(Sub0, STool, NewShapesMap, ShapePDMap, PDFileMap, ShapeLabelMap);
+    TDF_Label subL = AddShape(Sub0, STool, NewShapesMap, ShapePDMap, PDFileMap);
     if (!subL.IsNull()) {
       TDF_Label instL = STool->AddComponent(L, subL, it.Value().Location());
-      if (!ShapeLabelMap.IsBound(it.Value())) {
-        ShapeLabelMap.Bind(it.Value(), instL);
+      if (!myMap.IsBound(it.Value())) {
+        myMap.Bind(it.Value(), instL);
       }
     }
   }
   if (SHAS.Length() > 0) STool->SetExternRefs(L, SHAS);
-  ShapeLabelMap.Bind(S, L);
+  myMap.Bind(S, L);
   //STool->SetShape ( L, S ); // it is necessary for assemblies OCC1747 // commemted by skl for OCC2941
 
   return L;
@@ -973,8 +991,7 @@ static void propagateColorToParts(const Handle(XCAFDoc_ShapeTool)& theSTool,
 //=======================================================================
 
 Standard_Boolean STEPCAFControl_Reader::ReadColors(const Handle(XSControl_WorkSession) &WS,
-  Handle(TDocStd_Document)& Doc,
-  const XCAFDoc_DataMapOfShapeLabel &ShapeLabelMap) const
+  Handle(TDocStd_Document)& Doc) const
 {
   STEPConstruct_Styles Styles(WS);
   if (!Styles.LoadStyles()) {
@@ -1068,7 +1085,7 @@ Standard_Boolean STEPCAFControl_Reader::ReadColors(const Handle(XSControl_WorkSe
           TopoDS_Shape aSh;
           // PTV 10.02.2003 to find component of assembly CORRECTLY
           STEPConstruct_Tool Tool(WS);
-          TDF_Label aShLab = FindInstance(NAUO, CTool->ShapeTool(), Tool, ShapeLabelMap);
+          TDF_Label aShLab = FindInstance(NAUO, CTool->ShapeTool(), Tool, myMap);
           aSh = CTool->ShapeTool()->GetShape(aShLab);
           if (!aSh.IsNull()) {
             S = aSh;
@@ -1223,8 +1240,7 @@ TDF_Label STEPCAFControl_Reader::FindInstance(const Handle(StepRepr_NextAssembly
 
 Standard_Boolean STEPCAFControl_Reader::ReadNames(const Handle(XSControl_WorkSession) &WS,
   Handle(TDocStd_Document)& Doc,
-  const STEPCAFControl_DataMapOfPDExternFile &PDFileMap,
-  const XCAFDoc_DataMapOfShapeLabel &ShapeLabelMap) const
+  const STEPCAFControl_DataMapOfPDExternFile &PDFileMap) const
 {
   // get starting data
   const Handle(Interface_InterfaceModel) &Model = WS->Model();
@@ -1264,7 +1280,7 @@ Standard_Boolean STEPCAFControl_Reader::ReadNames(const Handle(XSControl_WorkSes
         else name = new TCollection_HAsciiString;
       }
       // find proper label
-      L = FindInstance(NAUO, STool, Tool, ShapeLabelMap);
+      L = FindInstance(NAUO, STool, Tool, myMap);
       if (L.IsNull()) continue;
 
       TCollection_ExtendedString str = convertName (name->String());
@@ -1286,7 +1302,7 @@ Standard_Boolean STEPCAFControl_Reader::ReadNames(const Handle(XSControl_WorkSes
         name = Prod->Id();
       else
         name = new TCollection_HAsciiString;
-      L = GetLabelFromPD(PD, STool, TP, PDFileMap, ShapeLabelMap);
+      L = GetLabelFromPD(PD, STool, TP, PDFileMap, myMap);
       if (L.IsNull()) continue;
       TCollection_ExtendedString str = convertName (name->String());
       TDataStd_Name::Set(L, str);
@@ -1334,8 +1350,7 @@ static TDF_Label GetLabelFromPD(const Handle(StepBasic_ProductDefinition) &PD,
 
 Standard_Boolean STEPCAFControl_Reader::ReadValProps(const Handle(XSControl_WorkSession) &WS,
   Handle(TDocStd_Document)& Doc,
-  const STEPCAFControl_DataMapOfPDExternFile &PDFileMap,
-  const XCAFDoc_DataMapOfShapeLabel &ShapeLabelMap) const
+  const STEPCAFControl_DataMapOfPDExternFile &PDFileMap) const
 {
   // get starting data
   const Handle(XSControl_TransferReader) &TR = WS->TransferReader();
@@ -1375,7 +1390,7 @@ Standard_Boolean STEPCAFControl_Reader::ReadValProps(const Handle(XSControl_Work
             NAUO = Handle(StepRepr_NextAssemblyUsageOccurrence)::DownCast(subs1.Value());
         }
         if (!NAUO.IsNull()) {
-          L = FindInstance(NAUO, STool, WS, ShapeLabelMap);
+          L = FindInstance(NAUO, STool, WS, myMap);
           if (L.IsNull()) continue;
         }
         else {
@@ -1387,7 +1402,7 @@ Standard_Boolean STEPCAFControl_Reader::ReadValProps(const Handle(XSControl_Work
               ProdDef = Handle(StepBasic_ProductDefinition)::DownCast(subsPDS.Value());
           }
           if (ProdDef.IsNull()) continue;
-          L = GetLabelFromPD(ProdDef, STool, Props, PDFileMap, ShapeLabelMap);
+          L = GetLabelFromPD(ProdDef, STool, Props, PDFileMap, myMap);
         }
       }
 
@@ -1432,8 +1447,8 @@ Standard_Boolean STEPCAFControl_Reader::ReadValProps(const Handle(XSControl_Work
         TopoDS_Shape S;
         S = TransferBRep::ShapeResult(TP, binder);
         if (S.IsNull()) continue;
-        if (ShapeLabelMap.IsBound(S))
-          L = ShapeLabelMap.Find(S);
+        if (myMap.IsBound(S))
+          L = myMap.Find(S);
         if (L.IsNull())
           STool->Search(S, L, Standard_True, Standard_True, Standard_True);
       }
@@ -1638,8 +1653,7 @@ static TDF_Label setSHUOintoDoc(const Handle(XSControl_WorkSession) &WS,
 
 Standard_Boolean STEPCAFControl_Reader::ReadSHUOs(const Handle(XSControl_WorkSession) &WS,
   Handle(TDocStd_Document)& Doc,
-  const STEPCAFControl_DataMapOfPDExternFile &PDFileMap,
-  const XCAFDoc_DataMapOfShapeLabel &ShapeLabelMap) const
+  const STEPCAFControl_DataMapOfPDExternFile &PDFileMap) const
 {
   // the big part code duplication from ReadColors.
   // It is possible to share this code functionality, just to decide how ???
@@ -1706,7 +1720,7 @@ Standard_Boolean STEPCAFControl_Reader::ReadSHUOs(const Handle(XSControl_WorkSes
         continue;
 
       // set the SHUO structure to the document
-      TDF_Label aLabelForStyle = setSHUOintoDoc(WS, SHUO, STool, PDFileMap, ShapeLabelMap);
+      TDF_Label aLabelForStyle = setSHUOintoDoc(WS, SHUO, STool, PDFileMap, myMap);
       if (aLabelForStyle.IsNull()) {
 #ifdef OCCT_DEBUG
         std::cout << "Warning: " << __FILE__ << ": coudnot create SHUO structure in the document" << std::endl;
@@ -1855,6 +1869,25 @@ Standard_Boolean readPMIPresentation(const Handle(Standard_Transient)& thePresen
       Handle(StepVisual_TessellatedGeometricSet) aTessSet = Handle(StepVisual_TessellatedGeometricSet)::DownCast(aTessItem);
       if (aTessSet.IsNull())
         continue;
+      gp_Trsf aTransf;
+      if (aTessSet->IsKind(STANDARD_TYPE(StepVisual_RepositionedTessellatedGeometricSet)))
+      {
+        Handle(StepVisual_RepositionedTessellatedGeometricSet) aRTGS =
+          Handle(StepVisual_RepositionedTessellatedGeometricSet)::DownCast(aTessSet);
+        Handle(Geom_Axis2Placement) aLocation = StepToGeom::MakeAxis2Placement(aRTGS->Location());
+        if (!aLocation.IsNull())
+        {
+          const gp_Ax3 anAx3Orig = gp::XOY();
+          const gp_Ax3 anAx3Targ(aLocation->Ax2());
+          if (anAx3Targ.Location().SquareDistance(anAx3Orig.Location()) >= Precision::SquareConfusion() ||
+            !anAx3Targ.Direction().IsEqual(anAx3Orig.Direction(), Precision::Angular()) ||
+            !anAx3Targ.XDirection().IsEqual(anAx3Orig.XDirection(), Precision::Angular()) ||
+            !anAx3Targ.YDirection().IsEqual(anAx3Orig.YDirection(), Precision::Angular()))
+          {
+            aTransf.SetTransformation(anAx3Targ, anAx3Orig);
+          }
+        }
+      }
       NCollection_Handle<StepVisual_Array1OfTessellatedItem> aListItems = aTessSet->Items();
       Standard_Integer nb = aListItems.IsNull() ? 0 : aListItems->Length();
       Handle(StepVisual_TessellatedCurveSet) aTessCurve;
@@ -1900,7 +1933,7 @@ Standard_Boolean readPMIPresentation(const Handle(Standard_Transient)& thePresen
         }
         aB.Add(aComp, aCurW);
       }
-      anAnnotationShape = aComp;
+      anAnnotationShape = aComp.Moved(aTransf);
     }
     if (!anAnnotationShape.IsNull())
     {
@@ -1983,7 +2016,7 @@ void readAnnotation(const Handle(XSControl_TransferReader)& theTR,
   XSAlgo::AlgoContainer()->PrepareForTransfer();
   STEPControl_ActorRead anActor;
   anActor.PrepareUnits(aDModel, aTP);
-  Standard_Real aFact = UnitsMethods::LengthFactor();
+  Standard_Real aFact = StepData_GlobalFactors::Intance().LengthFactor();
 
   // retrieve AnnotationPlane
   Handle(StepRepr_RepresentationItem) aDMIAE = aDMIA->IdentifiedItemValue(1);
@@ -2090,7 +2123,7 @@ void readConnectionPoints(const Handle(XSControl_TransferReader)& theTR,
     XSAlgo::AlgoContainer()->PrepareForTransfer();
     STEPControl_ActorRead anActor;
     anActor.PrepareUnits(aSDR, aTP);
-    aFact = UnitsMethods::LengthFactor();
+    aFact = StepData_GlobalFactors::Intance().LengthFactor();
   }
   
   if (theGDT->IsKind(STANDARD_TYPE(StepShape_DimensionalSize))) {
@@ -3528,11 +3561,11 @@ static void setDimObjectToXCAF(const Handle(Standard_Transient)& theEnt,
         //get qualifier for angular value
         aType = XCAFDimTolObjects_DimensionType_Size_Angular;
         if (anAngSize->AngleSelection() == StepShape_Equal)
-          aDimObj->SetQualifier(XCAFDimTolObjects_DimensionQualifier_Avg);
+          aDimObj->SetAngularQualifier(XCAFDimTolObjects_AngularQualifier_Equal);
         else if (anAngSize->AngleSelection() == StepShape_Large)
-          aDimObj->SetQualifier(XCAFDimTolObjects_DimensionQualifier_Max);
+          aDimObj->SetAngularQualifier(XCAFDimTolObjects_AngularQualifier_Large);
         else if (anAngSize->AngleSelection() == StepShape_Small)
-          aDimObj->SetQualifier(XCAFDimTolObjects_DimensionQualifier_Min);
+          aDimObj->SetAngularQualifier(XCAFDimTolObjects_AngularQualifier_Small);
       }
     }
     else
@@ -3544,11 +3577,11 @@ static void setDimObjectToXCAF(const Handle(Standard_Transient)& theEnt,
         //get qualifier for angular value
         aType = XCAFDimTolObjects_DimensionType_Location_Angular;
         if (anAngLoc->AngleSelection() == StepShape_Equal)
-          aDimObj->SetQualifier(XCAFDimTolObjects_DimensionQualifier_Avg);
+          aDimObj->SetAngularQualifier(XCAFDimTolObjects_AngularQualifier_Equal);
         else if (anAngLoc->AngleSelection() == StepShape_Large)
-          aDimObj->SetQualifier(XCAFDimTolObjects_DimensionQualifier_Max);
+          aDimObj->SetAngularQualifier(XCAFDimTolObjects_AngularQualifier_Large);
         else if (anAngLoc->AngleSelection() == StepShape_Small)
-          aDimObj->SetQualifier(XCAFDimTolObjects_DimensionQualifier_Min);
+          aDimObj->SetAngularQualifier(XCAFDimTolObjects_AngularQualifier_Small);
       }
     }
     if (aType == XCAFDimTolObjects_DimensionType_Location_None)
@@ -4032,7 +4065,7 @@ Standard_Boolean STEPCAFControl_Reader::ReadGDTs(const Handle(XSControl_WorkSess
         STEPControl_ActorRead anActor;
         Handle(Transfer_TransientProcess) aTP = aTR->TransientProcess();
         anActor.PrepareUnits(aDMIA->UsedRepresentation(), aTP);
-        aFact = UnitsMethods::LengthFactor();
+        aFact = StepData_GlobalFactors::Intance().LengthFactor();
       }
 
       // Presentation
@@ -4196,8 +4229,8 @@ Standard_Boolean STEPCAFControl_Reader::ReadMaterials(const Handle(XSControl_Wor
                   aDensity = aDensity / (anUnitCtx.LengthFactor()*anUnitCtx.LengthFactor()*anUnitCtx.LengthFactor());
                   // transfer length value for Density from millimeter to santimeter
                   // in order to result density has dimension gram/(sm*sm*sm)
-                  aDensity = aDensity*1000. / (UnitsMethods::GetCasCadeLengthUnit()
-                    * UnitsMethods::GetCasCadeLengthUnit() * UnitsMethods::GetCasCadeLengthUnit());
+                  const Standard_Real aCascadeUnit = StepData_GlobalFactors::Intance().CascadeUnit();
+                  aDensity = aDensity*1000. / (aCascadeUnit * aCascadeUnit * aCascadeUnit);
                 }
                 if (NU->IsKind(STANDARD_TYPE(StepBasic_ConversionBasedUnitAndMassUnit))) {
                   Standard_Real afact = 1.;
@@ -4542,7 +4575,6 @@ void collectRepresentationItems(const Interface_Graph& theGraph,
 //=======================================================================
 
 void STEPCAFControl_Reader::ExpandSubShapes(const Handle(XCAFDoc_ShapeTool)& ShapeTool,
-  const XCAFDoc_DataMapOfShapeLabel& ShapeLabelMap,
   const STEPCAFControl_DataMapOfShapePD& ShapePDMap) const
 {
   const Handle(Transfer_TransientProcess)& TP = Reader().WS()->TransferReader()->TransientProcess();
@@ -4592,10 +4624,10 @@ void STEPCAFControl_Reader::ExpandSubShapes(const Handle(XCAFDoc_ShapeTool)& Sha
     if (aReprItems.Length() == 0)
       continue;
 
-    if (!ShapeLabelMap.IsBound(aRootShape))
+    if (!myMap.IsBound(aRootShape))
       continue;
 
-    TDF_Label aRootLab = ShapeLabelMap.Find(aRootShape);
+    TDF_Label aRootLab = myMap.Find(aRootShape);
     // Do not add subshapes to assembly,
     // they will be processed with corresponding Shape_Product_Definition of necessary part.
     if (ShapeTool->IsAssembly(aRootLab))

@@ -12,9 +12,10 @@ BinMXCAFDoc_DimTolDriver.cxx
 BinMXCAFDoc_DimTolDriver.hxx
 BinMXCAFDoc_GraphNodeDriver.cxx
 BinMXCAFDoc_GraphNodeDriver.hxx
+BinMXCAFDoc_LengthUnitDriver.cxx
+BinMXCAFDoc_LengthUnitDriver.hxx
 BinMXCAFDoc_LocationDriver.cxx
 BinMXCAFDoc_LocationDriver.hxx
-BinMXCAFDoc_LocationDriver.lxx
 BinMXCAFDoc_MaterialDriver.cxx
 BinMXCAFDoc_MaterialDriver.hxx
 BinMXCAFDoc_NoteDriver.cxx

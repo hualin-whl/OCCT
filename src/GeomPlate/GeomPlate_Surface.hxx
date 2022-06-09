@@ -21,18 +21,10 @@
 #include <Standard_Type.hxx>
 
 #include <Plate_Plate.hxx>
-#include <Standard_Real.hxx>
 #include <Geom_Surface.hxx>
-#include <Standard_Boolean.hxx>
 #include <GeomAbs_Shape.hxx>
 #include <Standard_Integer.hxx>
 #include <TColgp_SequenceOfXY.hxx>
-class Geom_Surface;
-class Standard_RangeError;
-class Standard_NoSuchObject;
-class Geom_UndefinedDerivative;
-class Geom_UndefinedValue;
-class Plate_Plate;
 class gp_Trsf;
 class gp_GTrsf2d;
 class Geom_Curve;

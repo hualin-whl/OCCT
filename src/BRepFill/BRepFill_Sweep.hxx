@@ -21,13 +21,10 @@
 #include <Standard_DefineAlloc.hxx>
 #include <Standard_Handle.hxx>
 
-#include <Standard_Boolean.hxx>
-#include <Standard_Real.hxx>
 #include <GeomFill_ApproxStyle.hxx>
 #include <GeomAbs_Shape.hxx>
 #include <Standard_Integer.hxx>
 #include <TopoDS_Shape.hxx>
-#include <TopTools_HArray2OfShape.hxx>
 #include <TopTools_DataMapOfShapeShape.hxx>
 #include <TopTools_ListOfShape.hxx>
 #include <TopoDS_Wire.hxx>
@@ -36,11 +33,6 @@
 #include <BRepFill_TransitionStyle.hxx>
 class BRepFill_LocationLaw;
 class BRepFill_SectionLaw;
-class StdFail_NotDone;
-class Standard_OutOfRange;
-class Standard_ConstructionError;
-class TopoDS_Wire;
-class TopoDS_Shape;
 class TopoDS_Edge;
 
 

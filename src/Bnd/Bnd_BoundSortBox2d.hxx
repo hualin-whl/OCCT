@@ -21,16 +21,11 @@
 #include <Standard_DefineAlloc.hxx>
 #include <Standard_Handle.hxx>
 
-#include <Bnd_Box2d.hxx>
 #include <Bnd_HArray1OfBox2d.hxx>
-#include <Standard_Real.hxx>
 #include <Standard_Integer.hxx>
 #include <TColStd_HArray1OfListOfInteger.hxx>
 #include <TColStd_DataMapOfIntegerInteger.hxx>
 #include <TColStd_ListOfInteger.hxx>
-class Standard_NullValue;
-class Standard_MultiplyDefined;
-class Bnd_Box2d;
 
 
 //! A tool to compare a 2D bounding box with a set of 2D

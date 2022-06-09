@@ -17,9 +17,7 @@
 
 #include <BRepBuilderAPI_Transform.hxx>
 #include <BRepTools_TrsfModification.hxx>
-#include <gp.hxx>
 #include <gp_Trsf.hxx>
-#include <Standard_NoSuchObject.hxx>
 #include <TopoDS_Shape.hxx>
 
 //=======================================================================
@@ -57,10 +55,7 @@ BRepBuilderAPI_Transform::BRepBuilderAPI_Transform (const TopoDS_Shape& S,
 void BRepBuilderAPI_Transform::Perform(const TopoDS_Shape& S,
 				const Standard_Boolean Copy)
 {
-//  myUseModif = Copy || myTrsf.IsNegative(); bug gp_Trsf.
-  myUseModif = Copy || 
-    myTrsf.ScaleFactor()*myTrsf.HVectorialPart().Determinant() < 0. ||
-      Abs(Abs(myTrsf.ScaleFactor()) - 1) > gp::Resolution();
+  myUseModif = Copy || myTrsf.IsNegative() || (Abs(Abs(myTrsf.ScaleFactor()) - 1.) > TopLoc_Location::ScalePrec());
   if (myUseModif) {
     Handle(BRepTools_TrsfModification) theModif = 
       Handle(BRepTools_TrsfModification)::DownCast(myModification);

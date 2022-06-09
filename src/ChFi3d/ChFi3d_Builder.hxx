@@ -21,7 +21,6 @@
 #include <BRepAdaptor_Surface.hxx>
 #include <GeomAbs_Shape.hxx>
 #include <ChFiDS_ErrorStatus.hxx>
-#include <ChFiDS_ListOfStripe.hxx>
 #include <ChFiDS_Map.hxx>
 #include <ChFiDS_Regularities.hxx>
 #include <ChFiDS_SequenceOfSurfData.hxx>
@@ -37,9 +36,6 @@
 
 class TopOpeBRepDS_HDataStructure;
 class TopOpeBRepBuild_HBuilder;
-class Standard_OutOfRange;
-class Standard_NoSuchObject;
-class Standard_ConstructionError;
 class TopoDS_Edge;
 class ChFiDS_Spine;
 class TopoDS_Vertex;

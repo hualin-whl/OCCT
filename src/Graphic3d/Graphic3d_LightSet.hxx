@@ -14,7 +14,6 @@
 #ifndef _Graphic3d_LightSet_HeaderFile
 #define _Graphic3d_LightSet_HeaderFile
 
-#include <NCollection_IndexedDataMap.hxx>
 #include <Graphic3d_CLight.hxx>
 
 //! Class defining the set of light sources.
@@ -88,7 +87,7 @@ public:
       for (; myIter.More(); myIter.Next())
       {
         if ((myFilter & IterationFilter_ExcludeAmbient) != 0
-         && myIter.Key()->Type() == Graphic3d_TOLS_AMBIENT)
+         && myIter.Key()->Type() == Graphic3d_TypeOfLightSource_Ambient)
         {
           continue;
         }

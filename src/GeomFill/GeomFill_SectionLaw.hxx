@@ -21,17 +21,12 @@
 #include <Standard_Type.hxx>
 
 #include <Standard_Transient.hxx>
-#include <Standard_Boolean.hxx>
-#include <Standard_Real.hxx>
 #include <TColgp_Array1OfPnt.hxx>
 #include <TColStd_Array1OfReal.hxx>
 #include <TColgp_Array1OfVec.hxx>
 #include <Standard_Integer.hxx>
 #include <TColStd_Array1OfInteger.hxx>
 #include <GeomAbs_Shape.hxx>
-class Standard_NotImplemented;
-class Standard_DomainError;
-class Standard_OutOfRange;
 class Geom_BSplineSurface;
 class gp_Pnt;
 class Geom_Curve;

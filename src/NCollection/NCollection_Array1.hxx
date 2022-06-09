@@ -176,7 +176,6 @@ public:
     Assign (theOther);
   }
 
-#ifndef OCCT_NO_RVALUE_REFERENCE
   //! Move constructor
   NCollection_Array1 (NCollection_Array1&& theOther)
   : myLowerBound (theOther.myLowerBound),
@@ -186,7 +185,6 @@ public:
   {
     theOther.myDeletable  = false;
   }
-#endif
 
   //! C array-based constructor.
   //!
@@ -311,13 +309,11 @@ public:
     return Assign (theOther);
   }
 
-#ifndef OCCT_NO_RVALUE_REFERENCE
   //! Move assignment operator; @sa Move()
   NCollection_Array1& operator= (NCollection_Array1&& theOther)
   {
     return Move (theOther);
   }
-#endif
 
   //! @return first element
   const TheItemType& First() const
@@ -390,11 +386,10 @@ public:
                const Standard_Boolean theToCopyData)
   {
     Standard_RangeError_Raise_if (theUpper < theLower, "NCollection_Array1::Resize");
-    const Standard_Integer anOldLen   = Length();
-    const Standard_Integer aNewLen    = theUpper - theLower + 1;
-    const Standard_Integer aLowerOld  = myLowerBound;
+    const Standard_Integer anOldLen = Length();
+    const Standard_Integer aNewLen  = theUpper - theLower + 1;
 
-    TheItemType* aBeginOld = &myData[aLowerOld];
+    TheItemType* aBeginOld = myData != NULL ? &myData[myLowerBound] : NULL;
     myLowerBound = theLower;
     myUpperBound = theUpper;
     if (aNewLen == anOldLen)

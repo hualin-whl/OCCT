@@ -24,9 +24,8 @@
 #include <LDOM_BasicText.hxx>
 #include <LDOM_CharReference.hxx>
 #include <TCollection_ExtendedString.hxx>
-#include <OSD_OpenFile.hxx>
+#include <OSD_FileSystem.hxx>
 
-#include <fcntl.h>
 #ifdef _MSC_VER
 #include <io.h>
 #else
@@ -147,12 +146,12 @@ Standard_Boolean LDOMParser::parse (std::istream& anInput,
 
 Standard_Boolean LDOMParser::parse (const char * const aFileName)
 {
-  std::ifstream aFileStream;
-  OSD_OpenStream (aFileStream, aFileName, std::ios::in);
+  const Handle(OSD_FileSystem)& aFileSystem = OSD_FileSystem::DefaultFileSystem();
+  std::shared_ptr<std::istream> aFileStream = aFileSystem->OpenIStream (aFileName, std::ios::in);
 
-  if (aFileStream.good())
+  if (aFileStream.get() != NULL && aFileStream->good())
   {
-    return parse (aFileStream);
+    return parse (*aFileStream);
   }
   else
   {

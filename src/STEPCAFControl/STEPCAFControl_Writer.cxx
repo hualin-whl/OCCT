@@ -228,6 +228,7 @@
 #include <XCAFDoc_DocumentTool.hxx>
 #include <XCAFDoc_GeomTolerance.hxx>
 #include <XCAFDoc_GraphNode.hxx>
+#include <XCAFDoc_LengthUnit.hxx>
 #include <XCAFDoc_LayerTool.hxx>
 #include <XCAFDoc_Material.hxx>
 #include <XCAFDoc_MaterialTool.hxx>
@@ -240,8 +241,11 @@
 #include <XCAFPrs_IndexedDataMapOfShapeStyle.hxx>
 #include <XCAFPrs_DataMapOfStyleShape.hxx>
 #include <XCAFPrs_Style.hxx>
+#include <XSAlgo.hxx>
+#include <XSAlgo_AlgoContainer.hxx>
 #include <XSControl_TransferWriter.hxx>
 #include <XSControl_WorkSession.hxx>
+#include <UnitsMethods.hxx>
 
 // added by skl 15.01.2004 for D&GT writing
 //#include <StepRepr_CompoundItemDefinition.hxx>
@@ -359,6 +363,25 @@ IFSelect_ReturnStatus STEPCAFControl_Writer::Write (const Standard_CString filen
   return status;
 }
 
+//=======================================================================
+//function : prepareUnit
+//purpose  :
+//=======================================================================
+void STEPCAFControl_Writer::prepareUnit(const TDF_Label& theLabel,
+                                        const Handle(StepData_StepModel)& theModel)
+{
+  Handle(XCAFDoc_LengthUnit) aLengthAttr;
+  if (!theLabel.IsNull() &&
+    theLabel.Root().FindAttribute(XCAFDoc_LengthUnit::GetID(), aLengthAttr))
+  {
+    theModel->SetLocalLengthUnit(aLengthAttr->GetUnitValue() * 1000); // convert to mm
+  }
+  else
+  {
+    XSAlgo::AlgoContainer()->PrepareForTransfer(); // update unit info
+    theModel->SetLocalLengthUnit(UnitsMethods::GetCasCadeLengthUnit());
+  }
+}
 
 //=======================================================================
 //function : Transfer
@@ -516,6 +539,8 @@ Standard_Boolean STEPCAFControl_Writer::Transfer (STEPControl_Writer &writer,
   Handle(STEPCAFControl_ActorWrite) Actor =
     Handle(STEPCAFControl_ActorWrite)::DownCast ( writer.WS()->NormAdaptor()->ActorWrite() );
 
+  const Handle(StepData_StepModel) aModel = Handle(StepData_StepModel)::DownCast(writer.WS()->Model());
+  prepareUnit(labels.First(), aModel); // set local length unit to the model
   // translate free top-level shapes of the DECAF document
   Standard_Integer ap = Interface_Static::IVal ("write.step.schema");
   TDF_LabelSequence sublabels;
@@ -659,10 +684,9 @@ Standard_Boolean STEPCAFControl_Writer::Transfer (STEPControl_Writer &writer,
       WriteMaterials(writer.WS(),sublabels);
 
     // register all MDGPRs in model
-    const Handle(Interface_InterfaceModel) &Model = writer.WS()->Model();
     MoniTool_DataMapIteratorOfDataMapOfShapeTransient anItr(myMapCompMDGPR);
     for (; anItr.More(); anItr.Next())
-      Model->AddWithRefs( anItr.Value() );
+      aModel->AddWithRefs( anItr.Value() );
   }
   
   if ( multi ) { // external refs
@@ -1387,36 +1411,31 @@ Standard_Boolean STEPCAFControl_Writer::WriteNames (const Handle(XSControl_WorkS
 
     // get name
     Handle(TCollection_HAsciiString) hName = new TCollection_HAsciiString;
-    if ( ! GetLabelName (L, hName) ) continue;
-//    Handle(TDataStd_Name) N;
-//    if ( ! L.FindAttribute ( TDataStd_Name::GetID(), N ) ) continue;
-//    TCollection_ExtendedString name = N->Get();
-//    if ( name.Length() <=0 ) continue;
+    if (GetLabelName (L, hName))
+    {
+      // find target STEP entity for the current shape
+      if ( ! myLabels.IsBound ( L ) ) continue; // not recorded as translated, skip
+      TopoDS_Shape S = myLabels.Find ( L );
 
-    // find target STEP entity for the current shape
-//    TopoDS_Shape S;
-//    if ( ! XCAFDoc_ShapeTool::GetShape ( L, S ) ) continue;
-    if ( ! myLabels.IsBound ( L ) ) continue; // not recorded as translated, skip
-    TopoDS_Shape S = myLabels.Find ( L );
-
-    Handle(StepShape_ShapeDefinitionRepresentation) SDR;
-    Handle(TransferBRep_ShapeMapper) mapper = TransferBRep::ShapeMapper ( FP, S );
-    if ( ! FP->FindTypedTransient ( mapper, STANDARD_TYPE(StepShape_ShapeDefinitionRepresentation), SDR ) ) {
+      Handle(StepShape_ShapeDefinitionRepresentation) SDR;
+      Handle(TransferBRep_ShapeMapper) mapper = TransferBRep::ShapeMapper ( FP, S );
+      if ( ! FP->FindTypedTransient ( mapper, STANDARD_TYPE(StepShape_ShapeDefinitionRepresentation), SDR ) ) {
 #ifdef OCCT_DEBUG
-      std::cout << "Warning: Cannot find SDR for " << S.TShape()->DynamicType()->Name() << std::endl;
+        std::cout << "Warning: Cannot find SDR for " << S.TShape()->DynamicType()->Name() << std::endl;
 #endif
-      continue;
+        continue;
+      }
+
+      // set the name to the PRODUCT
+      Handle(StepRepr_PropertyDefinition) PropD = SDR->Definition().PropertyDefinition();
+      if ( PropD.IsNull() ) continue;
+      Handle(StepBasic_ProductDefinition) PD = PropD->Definition().ProductDefinition();
+      if ( PD.IsNull() ) continue;
+      Handle(StepBasic_Product) Prod = PD->Formation()->OfProduct();
+
+      Prod->SetId ( hName );
+      Prod->SetName ( hName );
     }
-
-    // set the name to the PRODUCT
-    Handle(StepRepr_PropertyDefinition) PropD = SDR->Definition().PropertyDefinition();
-    if ( PropD.IsNull() ) continue;
-    Handle(StepBasic_ProductDefinition) PD = PropD->Definition().ProductDefinition();
-    if ( PD.IsNull() ) continue;
-    Handle(StepBasic_Product) Prod = PD->Formation()->OfProduct();
-
-    Prod->SetId ( hName );
-    Prod->SetName ( hName );
 
     // write names for components of assemblies
     if ( XCAFDoc_ShapeTool::IsAssembly ( L ) ) {
@@ -1429,14 +1448,14 @@ Standard_Boolean STEPCAFControl_Writer::WriteNames (const Handle(XSControl_WorkS
 	TDF_Label Lref;
 	if ( ! XCAFDoc_ShapeTool::GetReferredShape ( lab, Lref ) || 
 	     ! myLabels.IsBound ( Lref ) ) continue;
-	S = myLabels.Find ( Lref );
+        TopoDS_Shape S = myLabels.Find ( Lref );
 	S.Move ( XCAFDoc_ShapeTool::GetLocation ( lab ) );
 	
 	hName = new TCollection_HAsciiString;
 	if ( ! GetLabelName (lab, hName) ) continue;
 	
 	// find the target CDSR corresponding to a shape
-	mapper = TransferBRep::ShapeMapper ( FP, S );
+        Handle(TransferBRep_ShapeMapper) mapper = TransferBRep::ShapeMapper ( FP, S );
 	Handle(Transfer_Binder) binder = FP->Find ( mapper );
 	Handle(StepShape_ContextDependentShapeRepresentation) CDSR;
 	if ( ! FP->FindTypedTransient (mapper,STANDARD_TYPE(StepShape_ContextDependentShapeRepresentation), CDSR) ) 
@@ -2423,13 +2442,13 @@ Handle(StepRepr_ShapeAspect) STEPCAFControl_Writer::WriteShapeAspect (const Hand
 //function : WritePresentation
 //purpose  : auxiliary (write annotation plane and presentation)
 //======================================================================
-void STEPCAFControl_Writer::WritePresentation(const Handle(XSControl_WorkSession) &WS,
-                                              const TopoDS_Shape thePresentation,
+void STEPCAFControl_Writer::WritePresentation(const Handle(XSControl_WorkSession)& WS,
+                                              const TopoDS_Shape& thePresentation,
                                               const Handle(TCollection_HAsciiString)& thePrsName,
                                               const Standard_Boolean hasSemantic,
                                               const Standard_Boolean hasPlane,
-                                              const gp_Ax2 theAnnotationPlane,
-                                              const gp_Pnt theTextPosition,
+                                              const gp_Ax2& theAnnotationPlane,
+                                              const gp_Pnt& theTextPosition,
                                               const Handle(Standard_Transient) theDimension)
 {
   if (thePresentation.IsNull())
@@ -2509,9 +2528,9 @@ void STEPCAFControl_Writer::WritePresentation(const Handle(XSControl_WorkSession
 //           necessary entities and link them to already written datum 
 //           in case of multiple features association)
 //=======================================================================
-Handle(StepDimTol_Datum) STEPCAFControl_Writer::WriteDatumAP242(const Handle(XSControl_WorkSession) &WS,
-                                                                const TDF_LabelSequence theShapeL,
-                                                                const TDF_Label theDatumL,
+Handle(StepDimTol_Datum) STEPCAFControl_Writer::WriteDatumAP242(const Handle(XSControl_WorkSession)& WS,
+                                                                const TDF_LabelSequence& theShapeL,
+                                                                const TDF_Label& theDatumL,
                                                                 const Standard_Boolean isFirstDTarget,
                                                                 const Handle(StepDimTol_Datum) theWrittenDatum)
 {
@@ -3233,8 +3252,8 @@ void STEPCAFControl_Writer::WriteToleranceZone (const Handle(XSControl_WorkSessi
 //           label and datum system)
 //======================================================================
 void STEPCAFControl_Writer::WriteGeomTolerance (const Handle(XSControl_WorkSession) &WS,
-                                                const TDF_LabelSequence theShapeSeqL,
-                                                const TDF_Label theGeomTolL,
+                                                const TDF_LabelSequence& theShapeSeqL,
+                                                const TDF_Label& theGeomTolL,
                                                 const Handle(StepDimTol_HArray1OfDatumSystemOrReference)& theDatumSystem,
                                                 const Handle(StepRepr_RepresentationContext)& theRC)
 {
@@ -3915,11 +3934,11 @@ Standard_Boolean STEPCAFControl_Writer::WriteDGTsAP242 (const Handle(XSControl_W
       Handle(StepShape_AngularLocation) aDim = new StepShape_AngularLocation();
       StepShape_AngleRelator aRelator = StepShape_Equal;
       if (anObject->HasQualifier()) {
-        XCAFDimTolObjects_DimensionQualifier aQualifier = anObject->GetQualifier();
+        XCAFDimTolObjects_AngularQualifier aQualifier = anObject->GetAngularQualifier();
         switch (aQualifier) {
-          case XCAFDimTolObjects_DimensionQualifier_Min: aRelator = StepShape_Small;
+          case XCAFDimTolObjects_AngularQualifier_Small : aRelator = StepShape_Small;
             break;
-          case XCAFDimTolObjects_DimensionQualifier_Max: aRelator = StepShape_Large;
+          case XCAFDimTolObjects_AngularQualifier_Large : aRelator = StepShape_Large;
             break;
           default: aRelator = StepShape_Equal;
         }
@@ -3945,11 +3964,11 @@ Standard_Boolean STEPCAFControl_Writer::WriteDGTsAP242 (const Handle(XSControl_W
       Handle(StepShape_AngularSize) aDim = new StepShape_AngularSize();
       StepShape_AngleRelator aRelator = StepShape_Equal;
       if (anObject->HasQualifier()) {
-        XCAFDimTolObjects_DimensionQualifier aQualifier = anObject->GetQualifier();
+        XCAFDimTolObjects_AngularQualifier aQualifier = anObject->GetAngularQualifier();
         switch (aQualifier) {
-          case XCAFDimTolObjects_DimensionQualifier_Min: aRelator = StepShape_Small;
+          case XCAFDimTolObjects_AngularQualifier_Small: aRelator = StepShape_Small;
             break;
-          case XCAFDimTolObjects_DimensionQualifier_Max: aRelator = StepShape_Large;
+          case XCAFDimTolObjects_AngularQualifier_Large: aRelator = StepShape_Large;
             break;
           default: aRelator = StepShape_Equal;
         }

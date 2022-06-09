@@ -25,22 +25,15 @@
 
 //-- To printf on NT
 
-#include <Bnd_Box.hxx>
 #include <BRep_Tool.hxx>
 #include <BRepAdaptor_Curve2d.hxx>
-#include <BRepAdaptor_Surface.hxx>
 #include <BRepBndLib.hxx>
-#include <BRepClass3d_DataMapIteratorOfMapOfInter.hxx>
 #include <BRepClass3d_SolidExplorer.hxx>
-#include <BRepClass_Edge.hxx>
 #include <BRepClass_FaceClassifier.hxx>
 #include <BRepClass_FacePassiveClassifier.hxx>
 #include <BRepTools.hxx>
 #include <BRepTopAdaptor_FClass2d.hxx>
-#include <ElCLib.hxx>
 #include <Extrema_ExtPS.hxx>
-#include <Geom2d_Curve.hxx>
-#include <GeomAbs_Shape.hxx>
 #include <gp.hxx>
 #include <gp_Lin.hxx>
 #include <gp_Pnt.hxx>
@@ -129,7 +122,7 @@ Standard_Boolean BRepClass3d_SolidExplorer::FindAPointInTheFace
     {
       T.SetCoord ( y, -x);
     }
-    Standard_Real ParamInit = RealLast();
+    Standard_Real ParamInit = Precision::Infinite();
     Standard_Real TolInit   = 0.00001;
     Standard_Boolean APointExist = Standard_False;
 

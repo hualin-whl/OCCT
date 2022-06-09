@@ -56,6 +56,20 @@ set_property (GLOBAL PROPERTY OCC_VERSION_MAJOR ${OCC_VERSION_MAJOR})
 set_property (GLOBAL PROPERTY OCC_VERSION_MINOR ${OCC_VERSION_MINOR})
 set_property (GLOBAL PROPERTY OCC_VERSION_MAINTENANCE ${OCC_VERSION_MAINTENANCE})
 
+# set soversion variable determining compatibility version on platforms with symlinks
+# 0 - for empty, 1 - for major, 2 - for major.minor, 3 - for major.minor.maintenance
+if (NOT BUILD_SOVERSION_NUMBERS)
+  set (BUILD_SOVERSION_NUMBERS "0" CACHE STRING "${BUILD_SOVERSION_NUMBERS_DESCR}" FORCE)
+  SET_PROPERTY(CACHE BUILD_SOVERSION_NUMBERS PROPERTY STRINGS 0 1 2 3)
+
+  # update default state of soversion on different platforms
+  if (WIN32 OR ANDROID OR EMSCRIPTEN)
+    set (BUILD_SOVERSION_NUMBERS 0)
+  else()
+    set (BUILD_SOVERSION_NUMBERS 2)
+  endif()
+endif()
+
 set (INSTALL_TEST_CASES OFF CACHE BOOL "${INSTALL_TEST_CASES_DESCR}")
 
 # Regeneration of OCCT resource files
@@ -89,6 +103,16 @@ endif()
 # option disabling OCCT exceptions in Release builds (No_Exception)
 if (NOT DEFINED BUILD_RELEASE_DISABLE_EXCEPTIONS)
   set (BUILD_RELEASE_DISABLE_EXCEPTIONS ON CACHE BOOL "${BUILD_RELEASE_DISABLE_EXCEPTIONS_DESCR}")
+endif()
+
+if (MSVC)
+  set (BUILD_FORCE_RelWithDebInfo OFF CACHE BOOL "${BUILD_FORCE_RelWithDebInfo_DESCR}")
+else()
+  set (BUILD_FORCE_RelWithDebInfo OFF)
+endif()
+
+if (BUILD_FORCE_RelWithDebInfo)
+  set (CMAKE_CONFIGURATION_TYPES Release Debug CACHE INTERNAL "" FORCE)
 endif()
 
 # option to enable or disable use of precompiled headers
@@ -370,6 +394,7 @@ set (USE_FREEIMAGE OFF CACHE BOOL "${USE_FREEIMAGE_DESCR}")
 set (USE_FFMPEG    OFF CACHE BOOL "${USE_FFMPEG_DESCR}")
 set (USE_OPENVR    OFF CACHE BOOL "${USE_OPENVR_DESCR}")
 set (USE_RAPIDJSON OFF CACHE BOOL "${USE_RAPIDJSON_DESCR}")
+set (USE_DRACO     OFF CACHE BOOL "${USE_DRACO_DESCR}")
 set (USE_TBB       OFF CACHE BOOL "${USE_TBB_DESCR}")
 set (USE_EIGEN     OFF CACHE BOOL "${USE_EIGEN_DESCR}")
 
@@ -650,8 +675,10 @@ endif()
 if (CAN_USE_GLES2)
   if (USE_GLES2)
     add_definitions (-DHAVE_GLES2_EXT)
-    OCCT_INCLUDE_CMAKE_FILE ("adm/cmake/egl")
-    OCCT_INCLUDE_CMAKE_FILE ("adm/cmake/gles2")
+    if (NOT IOS)
+      OCCT_INCLUDE_CMAKE_FILE ("adm/cmake/egl")
+      OCCT_INCLUDE_CMAKE_FILE ("adm/cmake/gles2")
+    endif()
   else()
     OCCT_CHECK_AND_UNSET_GROUP ("3RDPARTY_EGL")
     OCCT_CHECK_AND_UNSET_GROUP ("3RDPARTY_GLES2")
@@ -714,6 +741,24 @@ else()
 
   OCCT_CHECK_AND_UNSET_GROUP ("3RDPARTY_RAPIDJSON")
   OCCT_CHECK_AND_UNSET ("INSTALL_RAPIDJSON")
+endif()
+
+# Draco library
+# search for CSF_Draco variable in EXTERNLIB of each being used toolkit
+OCCT_IS_PRODUCT_REQUIRED (CSF_Draco CAN_USE_DRACO)
+if (CAN_USE_DRACO)
+  if (USE_DRACO)
+    add_definitions (-DHAVE_DRACO)
+    OCCT_INCLUDE_CMAKE_FILE ("adm/cmake/draco")
+  else()
+    OCCT_CHECK_AND_UNSET_GROUP ("3RDPARTY_DRACO")
+    OCCT_CHECK_AND_UNSET ("INSTALL_DRACO")
+  endif()
+else()
+  OCCT_CHECK_AND_UNSET ("USE_DRACO")
+
+  OCCT_CHECK_AND_UNSET_GROUP ("3RDPARTY_DRACO")
+  OCCT_CHECK_AND_UNSET ("INSTALL_DRACO")
 endif()
 
 # EIGEN
@@ -1095,14 +1140,8 @@ if (BUILD_SAMPLES_MFC)
   add_subdirectory(samples/mfc/standard/mfcsample)
   add_subdirectory(samples/mfc/standard/01_Geometry)
   add_subdirectory(samples/mfc/standard/02_Modeling)
-  add_subdirectory(samples/mfc/standard/03_Viewer2d)
-  add_subdirectory(samples/mfc/standard/04_Viewer3d)
-  add_subdirectory(samples/mfc/standard/05_ImportExport)
-  add_subdirectory(samples/mfc/standard/06_Ocaf)
-  add_subdirectory(samples/mfc/standard/07_Triangulation)
-  add_subdirectory(samples/mfc/standard/08_HLR)
-  add_subdirectory(samples/mfc/standard/09_Animation)
-  add_subdirectory(samples/mfc/standard/10_Convert)
+  add_subdirectory(samples/mfc/standard/03_ImportExport)
+  add_subdirectory(samples/mfc/standard/04_HLR)
 
   message (STATUS "Info: \(${CURRENT_TIME}\) MFC Sample projects added")
 endif()
@@ -1200,7 +1239,7 @@ foreach (OCCT_CONFIGURATION ${CMAKE_CONFIGURATION_TYPES})
 endforeach()
 # install OpenCASCADE config file with compile definitions and C/C++ flags ONLY for current configuration
 install (CODE "string (TOLOWER \"\${CMAKE_INSTALL_CONFIG_NAME}\" CMAKE_INSTALL_CONFIG_NAME_LOWER)")
-install (CODE "configure_file(\"${CMAKE_BINARY_DIR}/OpenCASCADECompileDefinitionsAndFlags-\${CMAKE_INSTALL_CONFIG_NAME_LOWER}.cmake\" \"${INSTALL_DIR}/${INSTALL_DIR_CMAKE}/OpenCASCADECompileDefinitionsAndFlags-\${CMAKE_INSTALL_CONFIG_NAME_LOWER}.cmake\" COPYONLY)")
+install (CODE "file(INSTALL FILES \"${CMAKE_BINARY_DIR}/OpenCASCADECompileDefinitionsAndFlags-\${CMAKE_INSTALL_CONFIG_NAME_LOWER}.cmake\" DESTINATION \"${INSTALL_DIR}/${INSTALL_DIR_CMAKE}/\" TYPE FILE)")
 
 foreach (OCCT_MODULE ${OCCT_MODULES})
   if (BUILD_MODULE_${OCCT_MODULE})

@@ -15,7 +15,6 @@
 
 #include <BinLDrivers_DocumentSection.hxx>
 #include <TDocStd_FormatVersion.hxx>
-#include <FSD_FileHeader.hxx>
 #include <BinMDataStd.hxx>
 
 //=======================================================================
@@ -228,6 +227,7 @@ void BinLDrivers_DocumentSection::ReadTOC
 #endif
   if (aNameBufferSize > 0) {
     theStream.read ((char *)&aBuf[0], (Standard_Size)aNameBufferSize);
+    aBuf[aNameBufferSize] = '\0';
     theSection.myName = (Standard_CString)&aBuf[0];
 
     uint64_t aValue[3];

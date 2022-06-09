@@ -21,7 +21,6 @@
 #include <Geom_Curve.hxx>
 #include <gp_Pnt.hxx>
 #include <Standard_Transient.hxx>
-#include <NCollection_Map.hxx>
 #include <NCollection_Vector.hxx>
 #include <Precision.hxx>
 #include <Standard_Type.hxx>
@@ -33,7 +32,6 @@
 #include <TopoDS_Shell.hxx>
 #include <TopoDS_Solid.hxx>
 #include <TopTools_MapOfShape.hxx>
-#include <TopTools_ShapeMapHasher.hxx>
 
 IMPLEMENT_STANDARD_RTTIEXT(BRepCheck_Solid,BRepCheck_Result)
 
@@ -208,10 +206,9 @@ void BRepCheck_Solid::Minimum()
   TopTools_MapOfShape aMSS;
   TopAbs_Orientation aOr; 
   BRepCheck_VectorOfToolSolid aVTS;
-  BRepCheck_ListOfStatus thelist;
-  //
-  myMap.Bind(myShape, thelist);
-  BRepCheck_ListOfStatus& aLST = myMap(myShape);
+
+  Handle(BRepCheck_HListOfStatus) aNewList = new BRepCheck_HListOfStatus();
+  BRepCheck_ListOfStatus& aLST = **myMap.Bound (myShape, aNewList);
   aLST.Append(BRepCheck_NoError);
   //
   //-------------------------------------------------
@@ -221,8 +218,7 @@ void BRepCheck_Solid::Minimum()
   for (; !bFound && aExp.More(); aExp.Next()) {
     const TopoDS_Shape& aF=aExp.Current();
     if (!aMSS.Add(aF)) {
-      BRepCheck::Add(myMap(myShape), 
-                     BRepCheck_InvalidImbricationOfShells);
+      BRepCheck::Add (aLST, BRepCheck_InvalidImbricationOfShells);
       bFound=!bFound;
     }
   } 
@@ -240,8 +236,7 @@ void BRepCheck_Solid::Minimum()
     if (aSx.ShapeType()!=TopAbs_SHELL) {
       aOr=aSx.Orientation();
       if (aOr!=TopAbs_INTERNAL) {
-        BRepCheck::Add(myMap(myShape), 
-                       BRepCheck_BadOrientationOfSubshape);
+        BRepCheck::Add (aLST, BRepCheck_BadOrientationOfSubshape);
       } 
       continue;
     }
@@ -281,8 +276,7 @@ void BRepCheck_Solid::Minimum()
   //
   if (!iCntSh && iCntShInt) {
     // all shells in the solid are internal
-    BRepCheck::Add(myMap(myShape), 
-                   BRepCheck_BadOrientationOfSubshape);
+    BRepCheck::Add (aLST, BRepCheck_BadOrientationOfSubshape);
   }
   //
   aNbVTS=aVTS.Size();
@@ -300,8 +294,7 @@ void BRepCheck_Solid::Minimum()
       ++aNbVTS1;
       if (aNbVTS1>1) {
         // Too many growths
-        BRepCheck::Add(myMap(myShape), 
-                       BRepCheck_EnclosedRegion);
+        BRepCheck::Add (aLST, BRepCheck_EnclosedRegion);
         break;
       }
     }
@@ -318,8 +311,7 @@ void BRepCheck_Solid::Minimum()
       bFlag=aTSi.IsOut(aTSj);
       if (bFlag) {
         // smt of solid is out of solid
-        BRepCheck::Add(myMap(myShape), 
-                       BRepCheck_SubshapeNotInShape);
+        BRepCheck::Add (aLST, BRepCheck_SubshapeNotInShape);
         bFound=!bFound;
       }
     }

@@ -22,11 +22,9 @@
 #include <NCollection_DataMap.hxx>
 #include <TopTools_ShapeMapHasher.hxx>
 #include <Standard_Integer.hxx>
-#include <Standard_Real.hxx>
 #include <Precision.hxx>
 #include <Standard_Transient.hxx>
 #include <TopAbs_State.hxx>
-#include <Standard_Boolean.hxx>
 #include <BRepAdaptor_Surface.hxx>
 #include <TColStd_MapTransientHasher.hxx>
 class IntTools_FClass2d;
@@ -44,7 +42,6 @@ class TopoDS_Vertex;
 class gp_Pnt2d;
 class IntTools_Curve;
 class Bnd_Box;
-class TopoDS_Shape;
 class Bnd_OBB;
 
 //! The intersection Context contains geometrical

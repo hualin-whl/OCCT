@@ -16,26 +16,21 @@
 
 #include <BRepTest.hxx>
 #include <BRepTest_Objects.hxx>
-#include <TColgp_Array1OfPnt2d.hxx>
 #include <DBRep.hxx>
 #include <Draw_Interpretor.hxx>
 #include <Draw_Appli.hxx>
 #include <BRepFilletAPI_MakeFillet.hxx>
 #include <BiTgte_Blend.hxx>
 #include <TopOpeBRepBuild_HBuilder.hxx>
-#include <TopTools_ListIteratorOfListOfShape.hxx>
 #include <TopAbs_ShapeEnum.hxx>
 #include <TopoDS_Shape.hxx>
 #include <TopoDS_Compound.hxx>
 #include <TopoDS_Edge.hxx>
-#include <TopoDS_Vertex.hxx>
 #include <TopoDS.hxx>
-#include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
 
 #include <BOPAlgo_PaveFiller.hxx>
 
-#include <BRepAlgoAPI_BooleanOperation.hxx>
 #include <BRepAlgoAPI_Fuse.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
 #include <BRepAlgoAPI_Section.hxx>
@@ -43,15 +38,12 @@
 #include <FilletSurf_Builder.hxx>
 #include <ChFi3d_FilletShape.hxx>
 #include <Geom_TrimmedCurve.hxx>
-#include <Geom_Surface.hxx>
-#include <Geom_Curve.hxx>
-#include <Geom2d_Curve.hxx>
 #include <TopTools_ListOfShape.hxx>
 #include <FilletSurf_StatusType.hxx>
 #include <FilletSurf_ErrorTypeStatus.hxx>
-#include <TopAbs.hxx>
 #include <DrawTrSurf.hxx>
 #include <Message.hxx>
+#include <Draw_ProgressIndicator.hxx>
 
 #include <stdio.h>
 
@@ -357,23 +349,24 @@ Standard_Integer boptopoblend(Draw_Interpretor& di, Standard_Integer narg, const
   }
 
   BOPAlgo_PaveFiller theDSFiller;
+  Handle(Draw_ProgressIndicator) aProgress = new Draw_ProgressIndicator(di, 1);
+  Message_ProgressScope aPS(aProgress->Start(), NULL, 10);
   TopTools_ListOfShape aLS;
   aLS.Append(S1); 
   aLS.Append(S2); 
   theDSFiller.SetArguments(aLS);
   //
-  theDSFiller.Perform();
+  theDSFiller.Perform(aPS.Next(8));
   if (theDSFiller.HasErrors()) {
     Message::SendFail() << "Check types of the arguments, please";
     return 1;
   }
 
   BRepAlgoAPI_BooleanOperation* pBuilder=NULL;
-
   if (fuse)
-    pBuilder = new BRepAlgoAPI_Fuse( S1, S2, theDSFiller );
+    pBuilder = new BRepAlgoAPI_Fuse( S1, S2, theDSFiller, aPS.Next(2) );
   else
-    pBuilder = new BRepAlgoAPI_Cut ( S1, S2, theDSFiller );
+    pBuilder = new BRepAlgoAPI_Cut ( S1, S2, theDSFiller, Standard_True, aPS.Next(2));
 
   Standard_Boolean anIsDone = pBuilder->IsDone();
   if (!anIsDone)
@@ -755,15 +748,15 @@ void  BRepTest::FilletCommands(Draw_Interpretor& theCommands)
   theCommands.Add("rollingball",
 		  "rollingball  r S radius [stopf1 ..] @ [f1 f2 ..] @ [e1 ..]",
 		  __FILE__,
-		  rollingball);
+		  rollingball, g);
 
   theCommands.Add("brollingball",
 		  "brollingball r S radius [stopf1 ..] @ [f1 f2 ..] @ [e1 ..]",
 		  __FILE__,
-		  rollingball);
+		  rollingball, g);
 
   theCommands.Add("trollingball",
 		  "trollingball r S radius [stopf1 ..] @ [f1 f2 ..] @ [e1 ..]",
 		  __FILE__,
-		  rollingball);
+		  rollingball, g);
 }

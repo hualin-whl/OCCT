@@ -131,11 +131,19 @@
 #include <StepGeom_UniformSurface.hxx>
 #include <StepGeom_UniformSurfaceAndRationalBSplineSurface.hxx>
 #include <StepGeom_Vector.hxx>
+#include <StepGeom_SuParameters.hxx>
+#include <StepKinematics_SpatialRotation.hxx>
+#include <StepKinematics_RotationAboutDirection.hxx>
 
 #include <TopoDS.hxx>
 #include <TopoDS_Face.hxx>
 
-#include <UnitsMethods.hxx>
+#include <StepData_GlobalFactors.hxx>
+#include <StepBasic_ConversionBasedUnitAndPlaneAngleUnit.hxx>
+#include <StepBasic_SiUnitAndPlaneAngleUnit.hxx>
+#include <StepBasic_MeasureWithUnit.hxx>
+#include <StepRepr_GlobalUnitAssignedContext.hxx>
+#include <STEPConstruct_UnitContext.hxx>
 
 //=============================================================================
 // Creation d' un Ax1Placement de Geom a partir d' un axis1_placement de Step
@@ -200,6 +208,28 @@ Handle(Geom_Axis2Placement) StepToGeom::MakeAxis2Placement (const Handle(StepGeo
     return new Geom_Axis2Placement(gpAx2);
   }
   return 0;
+}
+
+//=============================================================================
+// Creation of an AxisPlacement from a Kinematic SuParameters for Step
+//=============================================================================
+
+Handle(Geom_Axis2Placement) StepToGeom::MakeAxis2Placement(const Handle(StepGeom_SuParameters)& theSP)
+{
+  Standard_Real aLocX = theSP->A() * cos(theSP->Gamma()) + theSP->B() * sin(theSP->Gamma()) * sin(theSP->Alpha());
+  Standard_Real aLocY = theSP->A() * sin(theSP->Gamma()) - theSP->B() * cos(theSP->Gamma()) * sin(theSP->Alpha());
+  Standard_Real aLocZ = theSP->C() + theSP->B() * cos(theSP->Alpha());
+  Standard_Real anAsisX = sin(theSP->Gamma()) * sin(theSP->Alpha());
+  Standard_Real anAxisY = -cos(theSP->Gamma()) * sin(theSP->Alpha());
+  Standard_Real anAxisZ = cos(theSP->Alpha());
+  Standard_Real aDirX = cos(theSP->Gamma()) * cos(theSP->Beta()) - sin(theSP->Gamma()) * cos(theSP->Alpha()) * sin(theSP->Beta());
+  Standard_Real aDirY = sin(theSP->Gamma()) * cos(theSP->Beta()) + cos(theSP->Gamma()) * cos(theSP->Alpha()) * sin(theSP->Beta());
+  Standard_Real aDirZ = sin(theSP->Alpha())*sin(theSP->Beta());
+  const gp_Pnt Pgp (aLocX, aLocY, aLocZ);
+  const gp_Dir Ngp (anAsisX,anAxisY,anAxisZ);
+  const gp_Dir Vxgp(aDirX, aDirY, aDirZ);
+  gp_Ax2 gpAx2 = gp_Ax2(Pgp, Ngp, Vxgp);
+  return new Geom_Axis2Placement(gpAx2);
 }
 
 //=============================================================================
@@ -980,7 +1010,7 @@ Handle(Geom_CartesianPoint) StepToGeom::MakeCartesianPoint (const Handle(StepGeo
 {
   if (SP->NbCoordinates() == 3)
   {
-    const Standard_Real LF = UnitsMethods::LengthFactor();
+    const Standard_Real LF = StepData_GlobalFactors::Intance().LengthFactor();
     const Standard_Real X = SP->CoordinatesValue(1) * LF;
     const Standard_Real Y = SP->CoordinatesValue(2) * LF;
     const Standard_Real Z = SP->CoordinatesValue(3) * LF;
@@ -1018,7 +1048,7 @@ Handle(Geom_Circle) StepToGeom::MakeCircle (const Handle(StepGeom_Circle)& SC)
       MakeAxis2Placement (Handle(StepGeom_Axis2Placement3d)::DownCast(AxisSelect.Value()));
     if (! A.IsNull())
     {
-      return new Geom_Circle(A->Ax2(),SC->Radius() * UnitsMethods::LengthFactor());
+      return new Geom_Circle(A->Ax2(),SC->Radius() * StepData_GlobalFactors::Intance().LengthFactor());
     }
   }
   return 0;
@@ -1096,8 +1126,8 @@ Handle(Geom_ConicalSurface) StepToGeom::MakeConicalSurface (const Handle(StepGeo
   Handle(Geom_Axis2Placement) A = MakeAxis2Placement (SS->Position());
   if (! A.IsNull())
   {
-    const Standard_Real R = SS->Radius() * UnitsMethods::LengthFactor();
-    const Standard_Real Ang = SS->SemiAngle() * UnitsMethods::PlaneAngleFactor();
+    const Standard_Real R = SS->Radius() * StepData_GlobalFactors::Intance().LengthFactor();
+    const Standard_Real Ang = SS->SemiAngle() * StepData_GlobalFactors::Intance().PlaneAngleFactor();
     //#2(K3-3) rln 12/02/98 ProSTEP ct_turbine-A.stp entity #518, #3571 (gp::Resolution() is too little)
     return new Geom_ConicalSurface(A->Ax2(), Max(Ang, Precision::Angular()), R);
   }
@@ -1215,7 +1245,7 @@ Handle(Geom_CylindricalSurface) StepToGeom::MakeCylindricalSurface (const Handle
   Handle(Geom_Axis2Placement) A = MakeAxis2Placement(SS->Position());
   if (! A.IsNull())
   {
-    return new Geom_CylindricalSurface(A->Ax2(), SS->Radius() * UnitsMethods::LengthFactor());
+    return new Geom_CylindricalSurface(A->Ax2(), SS->Radius() * StepData_GlobalFactors::Intance().LengthFactor());
   }
   return 0;
 }
@@ -1231,11 +1261,16 @@ Handle(Geom_Direction) StepToGeom::MakeDirection (const Handle(StepGeom_Directio
     const Standard_Real X = SD->DirectionRatiosValue(1);
     const Standard_Real Y = SD->DirectionRatiosValue(2);
     const Standard_Real Z = SD->DirectionRatiosValue(3);
+    //5.08.2021. Unstable test bugs xde bug24759: Y is very large value - FPE in SquareModulus
+    if (Precision::IsInfinite(X) || Precision::IsInfinite(Y) || Precision::IsInfinite(Z))
+    {
+      return 0;
+    }
     // sln 22.10.2001. CTS23496: Direction is not created if it has null magnitude
     if (gp_XYZ(X, Y, Z).SquareModulus() > gp::Resolution()*gp::Resolution())
     {
       return new Geom_Direction(X, Y, Z);
-    }
+    }  
   }
   return 0;
 }
@@ -1296,7 +1331,7 @@ Handle(Geom_Ellipse) StepToGeom::MakeEllipse (const Handle(StepGeom_Ellipse)& SC
     if (! A1.IsNull())
     {
       gp_Ax2 A( A1->Ax2() );
-      const Standard_Real LF = UnitsMethods::LengthFactor();
+      const Standard_Real LF = StepData_GlobalFactors::Intance().LengthFactor();
       const Standard_Real majorR = SC->SemiAxis1() * LF;
       const Standard_Real minorR = SC->SemiAxis2() * LF;
       if ( majorR - minorR >= 0. ) { //:o9 abv 19 Feb 99
@@ -1352,7 +1387,7 @@ Handle(Geom_Hyperbola) StepToGeom::MakeHyperbola (const Handle(StepGeom_Hyperbol
     if (! A1.IsNull())
     {
       const gp_Ax2 A( A1->Ax2() );
-      const Standard_Real LF = UnitsMethods::LengthFactor();
+      const Standard_Real LF = StepData_GlobalFactors::Intance().LengthFactor();
       return new Geom_Hyperbola(A, SC->SemiAxis() * LF, SC->SemiImagAxis() * LF);
     }
   }
@@ -1432,7 +1467,7 @@ Handle(Geom_Parabola) StepToGeom::MakeParabola (const Handle(StepGeom_Parabola)&
     Handle(Geom_Axis2Placement) A = MakeAxis2Placement (Handle(StepGeom_Axis2Placement3d)::DownCast(AxisSelect.Value()));
     if (! A.IsNull())
     {
-      return new Geom_Parabola(A->Ax2(), SC->FocalDist() * UnitsMethods::LengthFactor());
+      return new Geom_Parabola(A->Ax2(), SC->FocalDist() * StepData_GlobalFactors::Intance().LengthFactor());
     }
   }
   return 0;
@@ -1556,8 +1591,8 @@ Handle(Geom_RectangularTrimmedSurface) StepToGeom::MakeRectangularTrimmedSurface
 
     Standard_Real uFact = 1.;
     Standard_Real vFact = 1.;
-    const Standard_Real LengthFact  = UnitsMethods::LengthFactor();
-    const Standard_Real AngleFact   = UnitsMethods::PlaneAngleFactor(); // abv 30.06.00 trj4_k1_geo-tc-214.stp #1477: PI/180.;
+    const Standard_Real LengthFact  = StepData_GlobalFactors::Intance().LengthFactor();
+    const Standard_Real AngleFact   = StepData_GlobalFactors::Intance().PlaneAngleFactor(); // abv 30.06.00 trj4_k1_geo-tc-214.stp #1477: PI/180.;
 
     if (theBasis->IsKind(STANDARD_TYPE(Geom_SphericalSurface)) ||
         theBasis->IsKind(STANDARD_TYPE(Geom_ToroidalSurface))) {
@@ -1599,7 +1634,7 @@ Handle(Geom_SphericalSurface) StepToGeom::MakeSphericalSurface (const Handle(Ste
   Handle(Geom_Axis2Placement) A = MakeAxis2Placement (SS->Position());
   if (! A.IsNull())
   {
-    return new Geom_SphericalSurface(A->Ax2(), SS->Radius() * UnitsMethods::LengthFactor());
+    return new Geom_SphericalSurface(A->Ax2(), SS->Radius() * StepData_GlobalFactors::Intance().LengthFactor());
   }
   return 0;
 }
@@ -1637,7 +1672,7 @@ Handle(Geom_Surface) StepToGeom::MakeSurface (const Handle(StepGeom_Surface)& SS
       if (! aBasisSurface.IsNull())
       {
         // sln 03.10.01. BUC61003. creation of  offset surface is corrected
-        const Standard_Real anOffset = OS->Distance() * UnitsMethods::LengthFactor();
+        const Standard_Real anOffset = OS->Distance() * StepData_GlobalFactors::Intance().LengthFactor();
         if (aBasisSurface->Continuity() == GeomAbs_C0)
         {
           const BRepBuilderAPI_MakeFace aBFace(aBasisSurface, Precision::Confusion());
@@ -1776,7 +1811,7 @@ Handle(Geom_ToroidalSurface) StepToGeom::MakeToroidalSurface (const Handle(StepG
   Handle(Geom_Axis2Placement) A = MakeAxis2Placement (SS->Position());
   if (! A.IsNull())
   {
-    const Standard_Real LF = UnitsMethods::LengthFactor();
+    const Standard_Real LF = StepData_GlobalFactors::Intance().LengthFactor();
     return new Geom_ToroidalSurface(A->Ax2(), Abs(SS->MajorRadius() * LF), Abs(SS->MinorRadius() * LF));
   }
   return 0;
@@ -2006,12 +2041,12 @@ Handle(Geom_TrimmedCurve) StepToGeom::MakeTrimmedCurve (const Handle(StepGeom_Tr
   if (theSTEPCurve->IsKind(STANDARD_TYPE(StepGeom_Line))) {
     const Handle(StepGeom_Line) theLine =
       Handle(StepGeom_Line)::DownCast(theSTEPCurve);
-    fact = theLine->Dir()->Magnitude() * UnitsMethods::LengthFactor();
+    fact = theLine->Dir()->Magnitude() * StepData_GlobalFactors::Intance().LengthFactor();
   }
   else if (theSTEPCurve->IsKind(STANDARD_TYPE(StepGeom_Circle)) ||
            theSTEPCurve->IsKind(STANDARD_TYPE(StepGeom_Ellipse))) {
 //    if (trim1 > 2.1*M_PI || trim2 > 2.1*M_PI) fact = M_PI / 180.;
-    fact = UnitsMethods::PlaneAngleFactor();
+    fact = StepData_GlobalFactors::Intance().PlaneAngleFactor();
     //:p3 abv 23 Feb 99: shift on pi/2 on ellipse with R1 < R2
     const Handle(StepGeom_Ellipse) ellipse = Handle(StepGeom_Ellipse)::DownCast(theSTEPCurve);
     if ( !ellipse.IsNull() && ellipse->SemiAxis1() - ellipse->SemiAxis2() < 0. )
@@ -2120,7 +2155,7 @@ Handle(Geom2d_BSplineCurve) StepToGeom::MakeTrimmedCurve2d (const Handle(StepGeo
     else if (BasisCurve->IsKind(STANDARD_TYPE(StepGeom_Circle)) ||
              BasisCurve->IsKind(STANDARD_TYPE(StepGeom_Ellipse))) {
 //      if (u1 > 2.1*M_PI || u2 > 2.1*M_PI) fact = M_PI / 180.;
-      fact = UnitsMethods::PlaneAngleFactor();
+      fact = StepData_GlobalFactors::Intance().PlaneAngleFactor();
       //:p3 abv 23 Feb 99: shift on pi/2 on ellipse with R1 < R2
       const Handle(StepGeom_Ellipse) ellipse = Handle(StepGeom_Ellipse)::DownCast(BasisCurve);
       if ( !ellipse.IsNull() && ellipse->SemiAxis1() - ellipse->SemiAxis2() < 0. )
@@ -2153,7 +2188,7 @@ Handle(Geom_VectorWithMagnitude) StepToGeom::MakeVectorWithMagnitude (const Hand
   Handle(Geom_Direction) D = MakeDirection (SV->Orientation());
   if (! D.IsNull())
   {
-    const gp_Vec V(D->Dir().XYZ() * SV->Magnitude() * UnitsMethods::LengthFactor());
+    const gp_Vec V(D->Dir().XYZ() * SV->Magnitude() * StepData_GlobalFactors::Intance().LengthFactor());
     return new Geom_VectorWithMagnitude(V);
   }
   return 0;
@@ -2173,4 +2208,223 @@ Handle(Geom2d_VectorWithMagnitude) StepToGeom::MakeVectorWithMagnitude2d (const 
     return new Geom2d_VectorWithMagnitude(V);
   }
   return 0;
+}
+
+//=============================================================================
+// Creation of a YptRotation from a Kinematic SpatialRotation for Step
+//=============================================================================
+
+Handle(TColStd_HArray1OfReal) StepToGeom::MakeYprRotation(const StepKinematics_SpatialRotation& SR, const Handle(StepRepr_GlobalUnitAssignedContext)& theCntxt)
+{
+  //If rotation is already a ypr_rotation, return it immediately
+  Handle(TColStd_HArray1OfReal) anYPRRotation;
+  if (!SR.YprRotation().IsNull() &&
+    SR.YprRotation()->Length() == 3)
+  {
+    return  SR.YprRotation();
+  }
+
+  if (SR.RotationAboutDirection().IsNull() ||
+    SR.RotationAboutDirection()->DirectionOfAxis()->DirectionRatios()->Length() != 3 ||
+    theCntxt.IsNull())
+  {
+    return NULL;
+  }
+  //rotation is a rotation_about_direction
+  Handle(Geom_Direction) anAxis;
+  anAxis = new Geom_Direction(SR.RotationAboutDirection()->DirectionOfAxis()->DirectionRatiosValue(1),
+    SR.RotationAboutDirection()->DirectionOfAxis()->DirectionRatiosValue(2),
+    SR.RotationAboutDirection()->DirectionOfAxis()->DirectionRatiosValue(3));
+  Standard_Real anAngle = SR.RotationAboutDirection()->RotationAngle();
+  if (Abs(anAngle) < Precision::Angular())
+  {
+    // a zero rotation is converted trivially
+    anYPRRotation = new TColStd_HArray1OfReal(1, 3);
+    anYPRRotation->SetValue(1, 0.);
+    anYPRRotation->SetValue(2, 0.);
+    anYPRRotation->SetValue(3, 0.);
+    return anYPRRotation;
+  }
+  Standard_Real dx = anAxis->X();
+  Standard_Real dy = anAxis->Y();
+  Standard_Real dz = anAxis->Z();
+  NCollection_Sequence<Handle(StepBasic_NamedUnit)> aPaUnits;
+  for (Standard_Integer anInd = 1; anInd <= theCntxt->Units()->Length(); ++anInd)
+  {
+    if (theCntxt->UnitsValue(anInd)->IsKind(STANDARD_TYPE(StepBasic_ConversionBasedUnitAndPlaneAngleUnit)) ||
+      theCntxt->UnitsValue(anInd)->IsKind(STANDARD_TYPE(StepBasic_SiUnitAndPlaneAngleUnit)))
+    {
+      aPaUnits.Append(theCntxt->UnitsValue(anInd));
+    }
+  }
+  if (aPaUnits.Length() != 1)
+  {
+    return anYPRRotation;
+  }
+  Handle(StepBasic_NamedUnit) aPau = aPaUnits.Value(1);
+  while (!aPau.IsNull() && aPau->IsKind((STANDARD_TYPE(StepBasic_ConversionBasedUnitAndPlaneAngleUnit))))
+  {
+    Handle(StepBasic_ConversionBasedUnitAndPlaneAngleUnit) aConverUnit = Handle(StepBasic_ConversionBasedUnitAndPlaneAngleUnit)::DownCast(aPau);
+    anAngle = anAngle * aConverUnit->ConversionFactor()->ValueComponent();
+    aPau = aConverUnit->ConversionFactor()->UnitComponent().NamedUnit();
+  }
+  if (aPau.IsNull())
+  {
+    return anYPRRotation;
+  }
+  Handle(StepBasic_SiUnitAndPlaneAngleUnit) aSiUnit = Handle(StepBasic_SiUnitAndPlaneAngleUnit)::DownCast(aPau);
+  if (aSiUnit.IsNull() || aSiUnit->Name() != StepBasic_sunRadian)
+  {
+    return anYPRRotation;
+  }
+  anAngle = (!aSiUnit->HasPrefix() ?
+             1. : STEPConstruct_UnitContext::ConvertSiPrefix(aSiUnit->Prefix())) * anAngle;
+  Standard_Real anUcf = SR.RotationAboutDirection()->RotationAngle() / anAngle;
+  Standard_Real aSA = Sin(anAngle);
+  Standard_Real aCA = Cos(anAngle);
+  Standard_Real aYaw = 0, aPitch = 0, aRoll = 0;
+
+  // axis parallel either to x-axis or to z-axis?
+  if (Abs(dy) < Precision::Confusion() && Abs(dx * dz) < Precision::SquareConfusion())
+  {
+    while (anAngle <= -M_PI)
+    {
+      anAngle = anAngle + 2 * M_PI;
+    }
+    while (anAngle > M_PI)
+    {
+      anAngle = anAngle - 2 * M_PI;
+    }
+
+    aYaw = anUcf * anAngle;
+    if (Abs(anAngle - M_PI) >= Precision::Angular())
+    {
+      aRoll = -aYaw;
+    }
+    else
+    {
+      aRoll = aYaw;
+    }
+    anYPRRotation = new TColStd_HArray1OfReal(1, 3);
+    anYPRRotation->SetValue(1, 0.);
+    anYPRRotation->SetValue(2, 0.);
+    anYPRRotation->SetValue(3, 0.);
+    if (Abs(dx) >= Precision::Confusion())
+    {
+      if (dx > 0.)
+        anYPRRotation->SetValue(3, aYaw);
+      else
+        anYPRRotation->SetValue(3, aRoll);
+    }
+    else
+    {
+      if (dz > 0.)
+        anYPRRotation->SetValue(1, aYaw);
+      else
+        anYPRRotation->SetValue(1, aRoll);
+    }
+    return anYPRRotation;
+  }
+
+  // axis parallel to y-axis - use y-axis as pitch axis
+  if (Abs(dy) >= Precision::Confusion() && Abs(dx) < Precision::Confusion() && Abs(dz) < Precision::Confusion())
+  {
+    if (aCA >= 0.)
+    {
+      aYaw = 0.0;
+      aRoll = 0.0;
+    }
+    else
+    {
+      aYaw = anUcf * M_PI;
+      aRoll = aYaw;
+    }
+    aPitch = anUcf * ATan2(aSA, Abs(aCA));
+    if (dy < 0.)
+    {
+      aPitch = -aPitch;
+    }
+    anYPRRotation = new TColStd_HArray1OfReal(1, 3);
+    anYPRRotation->SetValue(1, aYaw);
+    anYPRRotation->SetValue(2, aPitch);
+    anYPRRotation->SetValue(3, aRoll);
+    return anYPRRotation;
+  }
+  // axis not parallel to any axis of coordinate system
+  // compute rotation matrix
+  Standard_Real aCm1 = 1 - aCA;
+
+  Standard_Real aRotMat[3][3] = { { dx * dx * aCm1 + aCA ,dx * dy * aCm1 - dz * aSA, dx * dz * aCm1 + dy * aSA },
+                                  { dx * dy * aCm1 + dz * aSA,dy * dy * aCm1 + aCA, dy * dz * aCm1 - dx * aSA },
+                                  { dx * dz * aCm1 - dy * aSA, dy * dz * aCm1 + dx * aSA,dz * dz * aCm1 + aCA } };
+
+  // aRotMat[1][3] equals SIN(pitch_angle)
+  if (Abs(Abs(aRotMat[0][2] - 1.)) < Precision::Confusion())
+  {
+    // |aPitch| = PI/2
+    if (Abs(aRotMat[0][2] - 1.) < Precision::Confusion())
+      aPitch = M_PI_2;
+    else
+      aPitch = -M_PI_2;
+    // In this case, only the sum or difference of roll and yaw angles
+    // is relevant and can be evaluated from the matrix.
+    // According to IP `rectangular pitch angle' for ypr_rotation,
+    // the roll angle is set to zero.
+    aRoll = 0.;
+    aYaw = ATan2(aRotMat[1][0], aRotMat[1][1]);
+    // result of ATAN is in the range[-PI / 2, PI / 2].
+    // Here all four quadrants are needed.
+
+    if (aRotMat[1][1] < 0.)
+    {
+      if (aYaw <= 0.)
+        aYaw = aYaw + M_PI;
+      else
+        aYaw = aYaw - M_PI;
+    }
+  }
+  else
+  {
+    // COS (pitch_angle) not equal to zero
+    aYaw = ATan2(-aRotMat[0][1], aRotMat[0][0]);
+
+    if (aRotMat[0][0] < 0.)
+    {
+      if (aYaw < 0. || Abs(aYaw) < Precision::Angular())
+        aYaw = aYaw + M_PI;
+      else
+        aYaw = aYaw - M_PI;
+    }
+    Standard_Real aSY = Sin(aYaw);
+    Standard_Real aCY = Cos(aYaw);
+    Standard_Real aSR = Sin(aRoll);
+    Standard_Real aCR = Cos(aRoll);
+
+    if (Abs(aSY) > Abs(aCY) &&
+      Abs(aSY) > Abs(aSR) &&
+      Abs(aSY) > Abs(aCR))
+    {
+      aCm1 = -aRotMat[0][1] / aSY;
+    }
+    else
+    {
+      if (Abs(aCY) > Abs(aSR) && Abs(aCY) > Abs(aCR))
+        aCm1 = aRotMat[0][0] / aCY;
+      else
+        if (Abs(aSR) > Abs(aCR))
+          aCm1 = -aRotMat[1][2] / aSR;
+        else
+          aCm1 = aRotMat[2][2] / aCR;
+    }
+    aPitch = ATan2(aRotMat[0][2], aCm1);
+  }
+  aYaw = aYaw * anUcf;
+  aPitch = aPitch * anUcf;
+  aRoll = aRoll * anUcf;
+  anYPRRotation = new TColStd_HArray1OfReal(1, 3);
+  anYPRRotation->SetValue(1, aYaw);
+  anYPRRotation->SetValue(2, aPitch);
+  anYPRRotation->SetValue(3, aRoll);
+
+  return anYPRRotation;
 }

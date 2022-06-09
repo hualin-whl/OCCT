@@ -20,8 +20,6 @@
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepAlgo_FaceRestrictor.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
-#include <BRepFill_ListIteratorOfListOfOffsetWire.hxx>
-#include <BRepFill_OffsetWire.hxx>
 #include <BRepOffsetAPI_MakeOffset.hxx>
 #include <BRepTopAdaptor_FClass2d.hxx>
 #include <Extrema_ExtPS.hxx>
@@ -37,7 +35,6 @@
 #include <TopoDS_Shape.hxx>
 #include <TopoDS_Vertex.hxx>
 #include <TopoDS_Wire.hxx>
-#include <TopTools_ListIteratorOfListOfShape.hxx>
 
 #ifdef OCCT_DEBUG
 #include <BRepTools.hxx>
@@ -138,7 +135,8 @@ static void BuildDomains(TopoDS_Face&               myFace,
                          BRepFill_ListOfOffsetWire& myAlgos,
                          GeomAbs_JoinType           myJoin,
                          Standard_Boolean           myIsOpenResult,
-                         Standard_Boolean           isPositive)
+                         Standard_Boolean           isPositive,
+                         Standard_Boolean&          isWasReversed)
 {
   BRepAlgo_FaceRestrictor  FR;
   TopoDS_Vertex            VF,VL;
@@ -164,6 +162,7 @@ static void BuildDomains(TopoDS_Face&               myFace,
           const TopoDS_Shape& W = itl.Value();
           LWires.Append(W.Reversed());
         }
+		isWasReversed = Standard_True;
         WorkWires = LWires;
     }
   }
@@ -296,13 +295,13 @@ void BRepOffsetAPI_MakeOffset::Perform(const Standard_Real Offset,
     BRep_Builder    B;
     B.MakeCompound (Res);
     myLastIsLeft = (Offset <= 0);
-
+	Standard_Boolean isWasReversed = Standard_False;
     if( Offset <= 0. )
     {
       if( myLeft.IsEmpty() )
       {
         //  Modified by Sergey KHROMOV - Fri Apr 27 14:35:26 2001 Begin
-        BuildDomains(myFace,myWires,myLeft,myJoin,myIsOpenResult, Standard_False);
+        BuildDomains(myFace,myWires,myLeft,myJoin,myIsOpenResult, Standard_False, isWasReversed);
         //  Modified by Sergey KHROMOV - Fri Apr 27 14:35:26 2001 End
       }
 
@@ -312,9 +311,9 @@ void BRepOffsetAPI_MakeOffset::Perform(const Standard_Real Offset,
         Algo.Perform(Abs(Offset),Alt);
         if (Algo.IsDone() && !Algo.Shape().IsNull())
         {
-          B.Add(Res,Algo.Shape());
+          B.Add(Res,isWasReversed ? Algo.Shape().Reversed() : Algo.Shape());
           if (i == 1)
-            myShape = Algo.Shape();
+            myShape = isWasReversed ? Algo.Shape().Reversed() : Algo.Shape();
 
           i++;
         }
@@ -325,7 +324,7 @@ void BRepOffsetAPI_MakeOffset::Perform(const Standard_Real Offset,
       if (myRight.IsEmpty())
       {
         //  Modified by Sergey KHROMOV - Fri Apr 27 14:35:28 2001 Begin
-        BuildDomains(myFace,myWires,myRight,myJoin,myIsOpenResult, Standard_True);
+        BuildDomains(myFace,myWires,myRight,myJoin,myIsOpenResult, Standard_True, isWasReversed);
         //  Modified by Sergey KHROMOV - Fri Apr 27 14:35:35 2001 End
       }
 
@@ -336,10 +335,10 @@ void BRepOffsetAPI_MakeOffset::Perform(const Standard_Real Offset,
 
         if (Algo.IsDone() && !Algo.Shape().IsNull())
         {
-          B.Add(Res,Algo.Shape());
+          B.Add(Res, isWasReversed ? Algo.Shape().Reversed() : Algo.Shape());
 
           if (i == 1)
-            myShape = Algo.Shape();
+            myShape = isWasReversed ? Algo.Shape().Reversed() : Algo.Shape();
 
           i++;
         }
@@ -371,7 +370,7 @@ void BRepOffsetAPI_MakeOffset::Perform(const Standard_Real Offset,
 //purpose  : 
 //=======================================================================
 
-void BRepOffsetAPI_MakeOffset::Build()
+void BRepOffsetAPI_MakeOffset::Build(const Message_ProgressRange& /*theRange*/)
 {
   Done();
 }

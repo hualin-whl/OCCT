@@ -28,22 +28,6 @@ class TopoDS_Face;
 class ShapeExtend_WireData;
 class TopoDS_Shape;
 class TopoDS_Vertex;
-class ShapeAnalysis_Geom;
-class ShapeAnalysis_Curve;
-class ShapeAnalysis_Surface;
-class ShapeAnalysis_Edge;
-class ShapeAnalysis_Wire;
-class ShapeAnalysis_WireOrder;
-class ShapeAnalysis_WireVertex;
-class ShapeAnalysis_CheckSmallFace;
-class ShapeAnalysis_Shell;
-class ShapeAnalysis_ShapeTolerance;
-class ShapeAnalysis_ShapeContents;
-class ShapeAnalysis_FreeBounds;
-class ShapeAnalysis_FreeBoundData;
-class ShapeAnalysis_FreeBoundsProperties;
-class ShapeAnalysis_TransferParameters;
-class ShapeAnalysis_TransferParametersProj;
 
 
 //! This package is intended to analyze geometrical objects
@@ -110,43 +94,6 @@ public:
   //! Computes exact UV bounds of all wires on the face
   Standard_EXPORT static void GetFaceUVBounds (const TopoDS_Face& F, Standard_Real& Umin, Standard_Real& Umax, Standard_Real& Vmin, Standard_Real& Vmax);
 
-
-
-
-protected:
-
-
-
-
-
-private:
-
-
-
-
-friend class ShapeAnalysis_Geom;
-friend class ShapeAnalysis_Curve;
-friend class ShapeAnalysis_Surface;
-friend class ShapeAnalysis_Edge;
-friend class ShapeAnalysis_Wire;
-friend class ShapeAnalysis_WireOrder;
-friend class ShapeAnalysis_WireVertex;
-friend class ShapeAnalysis_CheckSmallFace;
-friend class ShapeAnalysis_Shell;
-friend class ShapeAnalysis_ShapeTolerance;
-friend class ShapeAnalysis_ShapeContents;
-friend class ShapeAnalysis_FreeBounds;
-friend class ShapeAnalysis_FreeBoundData;
-friend class ShapeAnalysis_FreeBoundsProperties;
-friend class ShapeAnalysis_TransferParameters;
-friend class ShapeAnalysis_TransferParametersProj;
-
 };
-
-
-
-
-
-
 
 #endif // _ShapeAnalysis_HeaderFile

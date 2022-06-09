@@ -18,22 +18,17 @@
 #define _CDM_Application_HeaderFile
 
 #include <Standard.hxx>
-#include <Standard_Type.hxx>
 
 #include <Standard_Transient.hxx>
-#include <Standard_Boolean.hxx>
 #include <Standard_Integer.hxx>
-#include <Standard_ExtString.hxx>
-#include <TCollection_AsciiString.hxx>
-#include <TCollection_ExtendedString.hxx>
 #include <CDM_MetaDataLookUpTable.hxx>
 #include <Message_ProgressRange.hxx>
 
-class CDM_Reference;
 class CDM_MetaData;
 class CDM_Document;
 class Resource_Manager;
 class Message_Messenger;
+class PCDM_ReaderFilter;
 
 class CDM_Application;
 DEFINE_STANDARD_HANDLE(CDM_Application, Standard_Transient)
@@ -95,6 +90,7 @@ private:
   Standard_EXPORT virtual Handle(CDM_Document) Retrieve
         (const Handle(CDM_MetaData)& aMetaData, 
          const Standard_Boolean UseStorageConfiguration,
+         const Handle(PCDM_ReaderFilter)& theFilter = Handle(PCDM_ReaderFilter)(),
          const Message_ProgressRange& theRange = Message_ProgressRange()) = 0;
   
   //! returns -1 if the metadata has no modification counter.

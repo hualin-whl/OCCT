@@ -13,11 +13,13 @@
 // Alternatively, this file may be used under the terms of Open CASCADE
 // commercial license or contractual agreement.
 
+#include <XSDRAWSTLVRML.hxx>
 
 #include <AIS_InteractiveContext.hxx>
 #include <Aspect_TypeOfMarker.hxx>
 #include <Bnd_Box.hxx>
 #include <BRep_Builder.hxx>
+#include <BRepLib_PointCloudShape.hxx>
 #include <DBRep.hxx>
 #include <DDocStd.hxx>
 #include <DDocStd_DrawDocument.hxx>
@@ -44,10 +46,13 @@
 #include <Quantity_NameOfColor.hxx>
 #include <RWGltf_CafReader.hxx>
 #include <RWGltf_CafWriter.hxx>
+#include <RWMesh_FaceIterator.hxx>
 #include <RWStl.hxx>
 #include <RWObj.hxx>
 #include <RWObj_CafReader.hxx>
 #include <RWObj_CafWriter.hxx>
+#include <RWPly_CafWriter.hxx>
+#include <RWPly_PlyWriterContext.hxx>
 #include <SelectMgr_SelectionManager.hxx>
 #include <Standard_ErrorHandler.hxx>
 #include <StdSelect_ViewerSelector3d.hxx>
@@ -61,6 +66,7 @@
 #include <TDataStd_Name.hxx>
 #include <TDocStd_Application.hxx>
 #include <TDocStd_Document.hxx>
+#include <TopoDS.hxx>
 #include <TopoDS_Face.hxx>
 #include <TopoDS_Shape.hxx>
 #include <UnitsAPI.hxx>
@@ -74,10 +80,12 @@
 #include <VrmlData_ShapeConvert.hxx>
 #include <XCAFDoc_DocumentTool.hxx>
 #include <XCAFDoc_ShapeTool.hxx>
+#include <XCAFPrs_DocumentExplorer.hxx>
+#include <XSAlgo.hxx>
+#include <XSAlgo_AlgoContainer.hxx>
 #include <XSDRAW.hxx>
 #include <XSDRAWIGES.hxx>
 #include <XSDRAWSTEP.hxx>
-#include <XSDRAWSTLVRML.hxx>
 #include <XSDRAWSTLVRML_DataSource.hxx>
 #include <XSDRAWSTLVRML_DataSource3D.hxx>
 #include <XSDRAWSTLVRML_DrawableMesh.hxx>
@@ -90,6 +98,85 @@ extern Standard_Boolean VDisplayAISObject (const TCollection_AsciiString& theNam
                                            const Handle(AIS_InteractiveObject)& theAISObj,
                                            Standard_Boolean theReplaceIfExists = Standard_True);
 
+//! Parse RWMesh_NameFormat enumeration.
+static bool parseNameFormat (const char* theArg,
+                             RWMesh_NameFormat& theFormat)
+{
+  TCollection_AsciiString aName (theArg);
+  aName.LowerCase();
+  if (aName == "empty")
+  {
+    theFormat = RWMesh_NameFormat_Empty;
+  }
+  else if (aName == "product"
+        || aName == "prod")
+  {
+    theFormat = RWMesh_NameFormat_Product;
+  }
+  else if (aName == "instance"
+        || aName == "inst")
+  {
+    theFormat = RWMesh_NameFormat_Instance;
+  }
+  else if (aName == "instanceorproduct"
+        || aName == "instance||product"
+        || aName == "instance|product"
+        || aName == "instorprod"
+        || aName == "inst||prod"
+        || aName == "inst|prod")
+  {
+    theFormat = RWMesh_NameFormat_InstanceOrProduct;
+  }
+  else if (aName == "productorinstance"
+        || aName == "product||instance"
+        || aName == "product|instance"
+        || aName == "prodorinst"
+        || aName == "prod||inst"
+        || aName == "prod|inst")
+  {
+    theFormat = RWMesh_NameFormat_ProductOrInstance;
+  }
+  else if (aName == "productandinstance"
+        || aName == "prodandinst"
+        || aName == "product&instance"
+        || aName == "prod&inst")
+  {
+    theFormat = RWMesh_NameFormat_ProductAndInstance;
+  }
+  else if (aName == "productandinstanceandocaf"
+        || aName == "verbose"
+        || aName == "debug")
+  {
+    theFormat = RWMesh_NameFormat_ProductAndInstanceAndOcaf;
+  }
+  else
+  {
+    return false;
+  }
+  return true;
+}
+
+//! Parse RWMesh_CoordinateSystem enumeration.
+static bool parseCoordinateSystem (const char* theArg,
+                                   RWMesh_CoordinateSystem& theSystem)
+{
+  TCollection_AsciiString aCSStr (theArg);
+  aCSStr.LowerCase();
+  if (aCSStr == "zup")
+  {
+    theSystem = RWMesh_CoordinateSystem_Zup;
+  }
+  else if (aCSStr == "yup")
+  {
+    theSystem = RWMesh_CoordinateSystem_Yup;
+  }
+  else
+  {
+    return Standard_False;
+  }
+  return Standard_True;
+}
+
 //=============================================================================
 //function : ReadGltf
 //purpose  : Reads glTF file
@@ -100,13 +187,14 @@ static Standard_Integer ReadGltf (Draw_Interpretor& theDI,
 {
   TCollection_AsciiString aDestName, aFilePath;
   Standard_Boolean toUseExistingDoc = Standard_False;
-  Standard_Real aSystemUnitFactor = UnitsMethods::GetCasCadeLengthUnit() * 0.001;
   Standard_Boolean toListExternalFiles = Standard_False;
   Standard_Boolean isParallel = Standard_False;
   Standard_Boolean isDoublePrec = Standard_False;
   Standard_Boolean toSkipLateDataLoading = Standard_False;
   Standard_Boolean toKeepLateData = Standard_True;
   Standard_Boolean toPrintDebugInfo = Standard_False;
+  Standard_Boolean toLoadAllScenes = Standard_False;
+  Standard_Boolean toPrintAssetInfo = Standard_False;
   Standard_Boolean isNoDoc = (TCollection_AsciiString(theArgVec[0]) == "readgltf");
   for (Standard_Integer anArgIter = 1; anArgIter < theNbArgs; ++anArgIter)
   {
@@ -116,33 +204,18 @@ static Standard_Integer ReadGltf (Draw_Interpretor& theDI,
      && (anArgCase == "-nocreate"
       || anArgCase == "-nocreatedoc"))
     {
-      toUseExistingDoc = Standard_True;
-      if (anArgIter + 1 < theNbArgs
-       && Draw::ParseOnOff (theArgVec[anArgIter + 1], toUseExistingDoc))
-      {
-        ++anArgIter;
-      }
+      toUseExistingDoc = Draw::ParseOnOffIterator (theNbArgs, theArgVec, anArgIter);
     }
     else if (anArgCase == "-parallel")
     {
-      isParallel = Standard_True;
-      if (anArgIter + 1 < theNbArgs
-       && Draw::ParseOnOff (theArgVec[anArgIter + 1], isParallel))
-      {
-        ++anArgIter;
-      }
+      isParallel = Draw::ParseOnOffIterator (theNbArgs, theArgVec, anArgIter);
     }
     else if (anArgCase == "-doubleprec"
           || anArgCase == "-doubleprecision"
           || anArgCase == "-singleprec"
           || anArgCase == "-singleprecision")
     {
-      isDoublePrec = Standard_True;
-      if (anArgIter + 1 < theNbArgs
-       && Draw::ParseOnOff (theArgVec[anArgIter + 1], isDoublePrec))
-      {
-        ++anArgIter;
-      }
+      isDoublePrec = Draw::ParseOnOffIterator (theNbArgs, theArgVec, anArgIter);
       if (anArgCase.StartsWith ("-single"))
       {
         isDoublePrec = !isDoublePrec;
@@ -150,31 +223,20 @@ static Standard_Integer ReadGltf (Draw_Interpretor& theDI,
     }
     else if (anArgCase == "-skiplateloading")
     {
-      toSkipLateDataLoading = Standard_True;
-      if (anArgIter + 1 < theNbArgs
-       && Draw::ParseOnOff (theArgVec[anArgIter + 1], toSkipLateDataLoading))
-      {
-        ++anArgIter;
-      }
+      toSkipLateDataLoading = Draw::ParseOnOffIterator (theNbArgs, theArgVec, anArgIter);
     }
     else if (anArgCase == "-keeplate")
     {
-      toKeepLateData = Standard_True;
-      if (anArgIter + 1 < theNbArgs
-       && Draw::ParseOnOff (theArgVec[anArgIter + 1], toKeepLateData))
-      {
-        ++anArgIter;
-      }
+      toKeepLateData = Draw::ParseOnOffIterator (theNbArgs, theArgVec, anArgIter);
+    }
+    else if (anArgCase == "-allscenes")
+    {
+      toLoadAllScenes = Draw::ParseOnOffIterator (theNbArgs, theArgVec, anArgIter);
     }
     else if (anArgCase == "-toprintinfo"
           || anArgCase == "-toprintdebuginfo")
     {
-      toPrintDebugInfo = Standard_True;
-      if (anArgIter + 1 < theNbArgs
-       && Draw::ParseOnOff (theArgVec[anArgIter + 1], toPrintDebugInfo))
-      {
-        ++anArgIter;
-      }
+      toPrintDebugInfo = Draw::ParseOnOffIterator (theNbArgs, theArgVec, anArgIter);
     }
     else if (anArgCase == "-listexternalfiles"
           || anArgCase == "-listexternals"
@@ -182,7 +244,12 @@ static Standard_Integer ReadGltf (Draw_Interpretor& theDI,
           || anArgCase == "-external"
           || anArgCase == "-externalfiles")
     {
-      toListExternalFiles = Standard_True;
+      toListExternalFiles = Draw::ParseOnOffIterator (theNbArgs, theArgVec, anArgIter);
+    }
+    else if (anArgCase == "-assetinfo"
+          || anArgCase == "-metadata")
+    {
+      toPrintAssetInfo = Draw::ParseOnOffIterator (theNbArgs, theArgVec, anArgIter);
     }
     else if (aDestName.IsEmpty())
     {
@@ -198,6 +265,13 @@ static Standard_Integer ReadGltf (Draw_Interpretor& theDI,
       return 1;
     }
   }
+  if (aFilePath.IsEmpty() && !aDestName.IsEmpty())
+  {
+    if (toListExternalFiles || toPrintAssetInfo)
+    {
+      std::swap (aFilePath, aDestName);
+    }
+  }
   if (aFilePath.IsEmpty())
   {
     Message::SendFail() << "Syntax error: wrong number of arguments";
@@ -206,7 +280,7 @@ static Standard_Integer ReadGltf (Draw_Interpretor& theDI,
 
   Handle(Draw_ProgressIndicator) aProgress = new Draw_ProgressIndicator (theDI, 1);
   Handle(TDocStd_Document) aDoc;
-  if (!toListExternalFiles
+  if (!aDestName.IsEmpty()
    && !isNoDoc)
   {
     Handle(TDocStd_Application) anApp = DDocStd::GetApplication();
@@ -228,8 +302,15 @@ static Standard_Integer ReadGltf (Draw_Interpretor& theDI,
     }
   }
 
+  Standard_Real aScaleFactorM = 1.;
+  if (!XCAFDoc_DocumentTool::GetLengthUnit(aDoc, aScaleFactorM, UnitsMethods_LengthUnit_Meter))
+  {
+    XSAlgo::AlgoContainer()->PrepareForTransfer(); // update unit info
+    aScaleFactorM = UnitsMethods::GetCasCadeLengthUnit(UnitsMethods_LengthUnit_Meter);
+  }
+
   RWGltf_CafReader aReader;
-  aReader.SetSystemLengthUnit (aSystemUnitFactor);
+  aReader.SetSystemLengthUnit (aScaleFactorM);
   aReader.SetSystemCoordinateSystem (RWMesh_CoordinateSystem_Zup);
   aReader.SetDocument (aDoc);
   aReader.SetParallel (isParallel);
@@ -237,13 +318,10 @@ static Standard_Integer ReadGltf (Draw_Interpretor& theDI,
   aReader.SetToSkipLateDataLoading (toSkipLateDataLoading);
   aReader.SetToKeepLateData (toKeepLateData);
   aReader.SetToPrintDebugMessages (toPrintDebugInfo);
-  if (toListExternalFiles)
+  aReader.SetLoadAllScenes (toLoadAllScenes);
+  if (aDestName.IsEmpty())
   {
     aReader.ProbeHeader (aFilePath);
-    for (NCollection_IndexedMap<TCollection_AsciiString>::Iterator aFileIter (aReader.ExternalFiles()); aFileIter.More(); aFileIter.Next())
-    {
-      theDI << "\"" << aFileIter.Value() << "\" ";
-    }
   }
   else
   {
@@ -259,6 +337,32 @@ static Standard_Integer ReadGltf (Draw_Interpretor& theDI,
       Draw::Set (aDestName.ToCString(), aDrawDoc);
     }
   }
+
+  bool isFirstLine = true;
+  if (toPrintAssetInfo)
+  {
+    for (TColStd_IndexedDataMapOfStringString::Iterator aKeyIter (aReader.Metadata()); aKeyIter.More(); aKeyIter.Next())
+    {
+      if (!isFirstLine)
+      {
+        theDI << "\n";
+      }
+      isFirstLine = false;
+      theDI << aKeyIter.Key() << ": " << aKeyIter.Value();
+    }
+  }
+  if (toListExternalFiles)
+  {
+    if (!isFirstLine)
+    {
+      theDI << "\n";
+    }
+    for (NCollection_IndexedMap<TCollection_AsciiString>::Iterator aFileIter (aReader.ExternalFiles()); aFileIter.More(); aFileIter.Next())
+    {
+      theDI << "\"" << aFileIter.Value() << "\" ";
+    }
+  }
+
   return 0;
 }
 
@@ -275,7 +379,11 @@ static Standard_Integer WriteGltf (Draw_Interpretor& theDI,
   Handle(TDocStd_Application) anApp = DDocStd::GetApplication();
   TColStd_IndexedDataMapOfStringString aFileInfo;
   RWGltf_WriterTrsfFormat aTrsfFormat = RWGltf_WriterTrsfFormat_Compact;
+  RWMesh_CoordinateSystem aSystemCoordSys = RWMesh_CoordinateSystem_Zup;
   bool toForceUVExport = false, toEmbedTexturesInGlb = true;
+  bool toMergeFaces = false, toSplitIndices16 = false;
+  RWMesh_NameFormat aNodeNameFormat = RWMesh_NameFormat_InstanceOrProduct;
+  RWMesh_NameFormat aMeshNameFormat = RWMesh_NameFormat_Product;
   for (Standard_Integer anArgIter = 1; anArgIter < theNbArgs; ++anArgIter)
   {
     TCollection_AsciiString anArgCase (theArgVec[anArgIter]);
@@ -298,6 +406,40 @@ static Standard_Integer WriteGltf (Draw_Interpretor& theDI,
        && Draw::ParseOnOff (theArgVec[anArgIter + 1], toForceUVExport))
       {
         ++anArgIter;
+      }
+    }
+    else if (anArgCase == "-mergefaces")
+    {
+      toMergeFaces = true;
+      if (anArgIter + 1 < theNbArgs
+       && Draw::ParseOnOff (theArgVec[anArgIter + 1], toMergeFaces))
+      {
+        ++anArgIter;
+      }
+    }
+    else if (anArgCase == "-splitindices16"
+          || anArgCase == "-splitindexes16"
+          || anArgCase == "-splitindices"
+          || anArgCase == "-splitindexes"
+          || anArgCase == "-splitind")
+    {
+      toSplitIndices16 = true;
+      if (anArgIter + 1 < theNbArgs
+       && Draw::ParseOnOff (theArgVec[anArgIter + 1], toSplitIndices16))
+      {
+        ++anArgIter;
+      }
+    }
+    else if (anArgIter + 1 < theNbArgs
+          && (anArgCase == "-systemcoordinatesystem"
+           || anArgCase == "-systemcoordsystem"
+           || anArgCase == "-systemcoordsys"
+           || anArgCase == "-syscoordsys"))
+    {
+      if (!parseCoordinateSystem (theArgVec[++anArgIter], aSystemCoordSys))
+      {
+        Message::SendFail() << "Syntax error: unknown coordinate system '" << theArgVec[anArgIter] << "'";
+        return 1;
       }
     }
     else if (anArgCase == "-trsfformat"
@@ -323,6 +465,28 @@ static Standard_Integer WriteGltf (Draw_Interpretor& theDI,
         return 1;
       }
     }
+    else if (anArgCase == "-nodenameformat"
+          || anArgCase == "-nodename")
+    {
+      ++anArgIter;
+      if (anArgIter >= theNbArgs
+      || !parseNameFormat (theArgVec[anArgIter], aNodeNameFormat))
+      {
+        Message::SendFail() << "Syntax error at '" << anArgCase << "'";
+        return 1;
+      }
+    }
+    else if (anArgCase == "-meshnameformat"
+          || anArgCase == "-meshname")
+    {
+      ++anArgIter;
+      if (anArgIter >= theNbArgs
+      || !parseNameFormat (theArgVec[anArgIter], aMeshNameFormat))
+      {
+        Message::SendFail() << "Syntax error at '" << anArgCase << "'";
+        return 1;
+      }
+    }
     else if (aDoc.IsNull())
     {
       Standard_CString aNameVar = theArgVec[anArgIter];
@@ -338,6 +502,9 @@ static Standard_Integer WriteGltf (Draw_Interpretor& theDI,
 
         anApp->NewDocument (TCollection_ExtendedString ("BinXCAF"), aDoc);
         Handle(XCAFDoc_ShapeTool) aShapeTool = XCAFDoc_DocumentTool::ShapeTool (aDoc->Main());
+        // auto-naming doesn't generate meaningful instance names
+        //aShapeTool->SetAutoNaming (false);
+        aNodeNameFormat = RWMesh_NameFormat_Product;
         aShapeTool->AddShape (aShape);
       }
     }
@@ -365,15 +532,23 @@ static Standard_Integer WriteGltf (Draw_Interpretor& theDI,
 
   TCollection_AsciiString anExt = aGltfFilePath;
   anExt.LowerCase();
-
-  const Standard_Real aSystemUnitFactor = UnitsMethods::GetCasCadeLengthUnit() * 0.001;
+  Standard_Real aScaleFactorM = 1.;
+  if (!XCAFDoc_DocumentTool::GetLengthUnit(aDoc, aScaleFactorM, UnitsMethods_LengthUnit_Meter))
+  {
+    XSAlgo::AlgoContainer()->PrepareForTransfer(); // update unit info
+    aScaleFactorM = UnitsMethods::GetCasCadeLengthUnit(UnitsMethods_LengthUnit_Meter);
+  }
 
   RWGltf_CafWriter aWriter (aGltfFilePath, anExt.EndsWith (".glb"));
   aWriter.SetTransformationFormat (aTrsfFormat);
+  aWriter.SetNodeNameFormat (aNodeNameFormat);
+  aWriter.SetMeshNameFormat (aMeshNameFormat);
   aWriter.SetForcedUVExport (toForceUVExport);
   aWriter.SetToEmbedTexturesInGlb (toEmbedTexturesInGlb);
-  aWriter.ChangeCoordinateSystemConverter().SetInputLengthUnit (aSystemUnitFactor);
-  aWriter.ChangeCoordinateSystemConverter().SetInputCoordinateSystem (RWMesh_CoordinateSystem_Zup);
+  aWriter.SetMergeFaces (toMergeFaces);
+  aWriter.SetSplitIndices16 (toSplitIndices16);
+  aWriter.ChangeCoordinateSystemConverter().SetInputLengthUnit (aScaleFactorM);
+  aWriter.ChangeCoordinateSystemConverter().SetInputCoordinateSystem (aSystemCoordSys);
   aWriter.Perform (aDoc, aFileInfo, aProgress->Start());
   return 0;
 }
@@ -410,6 +585,7 @@ static Standard_Integer readstl(Draw_Interpretor& theDI,
 {
   TCollection_AsciiString aShapeName, aFilePath;
   bool toCreateCompOfTris = false;
+  double aMergeAngle = M_PI / 2.0;
   for (Standard_Integer anArgIter = 1; anArgIter < theArgc; ++anArgIter)
   {
     TCollection_AsciiString anArg (theArgv[anArgIter]);
@@ -431,6 +607,32 @@ static Standard_Integer readstl(Draw_Interpretor& theDI,
         ++anArgIter;
       }
     }
+    else if (anArg == "-mergeangle"
+          || anArg == "-smoothangle"
+          || anArg == "-nomergeangle"
+          || anArg == "-nosmoothangle")
+    {
+      if (anArg.StartsWith ("-no"))
+      {
+        aMergeAngle = M_PI / 2.0;
+      }
+      else
+      {
+        aMergeAngle = M_PI / 4.0;
+        if (anArgIter + 1 < theArgc
+         && Draw::ParseReal (theArgv[anArgIter + 1], aMergeAngle))
+        {
+          if (aMergeAngle < 0.0 || aMergeAngle > 90.0)
+          {
+            theDI << "Syntax error: angle should be within [0,90] range";
+            return 1;
+          }
+
+          ++anArgIter;
+          aMergeAngle = aMergeAngle * M_PI / 180.0;
+        }
+      }
+    }
     else
     {
       Message::SendFail() << "Syntax error: unknown argument '" << theArgv[anArgIter] << "'";
@@ -448,7 +650,7 @@ static Standard_Integer readstl(Draw_Interpretor& theDI,
   {
     // Read STL file to the triangulation.
     Handle(Draw_ProgressIndicator) aProgress = new Draw_ProgressIndicator (theDI, 1);
-    Handle(Poly_Triangulation) aTriangulation = RWStl::ReadFile (aFilePath.ToCString(), aProgress->Start());
+    Handle(Poly_Triangulation) aTriangulation = RWStl::ReadFile (aFilePath.ToCString(), aMergeAngle, aProgress->Start());
 
     TopoDS_Face aFace;
     BRep_Builder aB;
@@ -464,27 +666,6 @@ static Standard_Integer readstl(Draw_Interpretor& theDI,
   }
   DBRep::Set (aShapeName.ToCString(), aShape);
   return 0;
-}
-
-//! Parse RWMesh_CoordinateSystem enumeration.
-static Standard_Boolean parseCoordinateSystem (const char* theArg,
-                                               RWMesh_CoordinateSystem& theSystem)
-{
-  TCollection_AsciiString aCSStr (theArg);
-  aCSStr.LowerCase();
-  if (aCSStr == "zup")
-  {
-    theSystem = RWMesh_CoordinateSystem_Zup;
-  }
-  else if (aCSStr == "yup")
-  {
-    theSystem = RWMesh_CoordinateSystem_Yup;
-  }
-  else
-  {
-    return Standard_False;
-  }
-  return Standard_True;
 }
 
 //=============================================================================
@@ -620,10 +801,16 @@ static Standard_Integer ReadObj (Draw_Interpretor& theDI,
       return 1;
     }
   }
+  Standard_Real aScaleFactorM = 1.;
+  if (!XCAFDoc_DocumentTool::GetLengthUnit(aDoc, aScaleFactorM, UnitsMethods_LengthUnit_Meter))
+  {
+    XSAlgo::AlgoContainer()->PrepareForTransfer(); // update unit info
+    aScaleFactorM = UnitsMethods::GetCasCadeLengthUnit(UnitsMethods_LengthUnit_Meter);
+  }
 
   RWObj_CafReader aReader;
   aReader.SetSinglePrecision (isSinglePrecision);
-  aReader.SetSystemLengthUnit (UnitsMethods::GetCasCadeLengthUnit() * 0.001);
+  aReader.SetSystemLengthUnit (aScaleFactorM);
   aReader.SetSystemCoordinateSystem (aResultCoordSys);
   aReader.SetFileLengthUnit (aFileUnitFactor);
   aReader.SetFileCoordinateSystem (aFileCoordSys);
@@ -860,8 +1047,8 @@ static Standard_Integer loadvrml
       }
 
       VrmlData_Scene aScene;
-      Standard_Real anOCCUnit = UnitsMethods::GetCasCadeLengthUnit();
-      aScene.SetLinearScale(1000. / anOCCUnit);
+      Standard_Real anOCCUnitMM = UnitsMethods::GetCasCadeLengthUnit();
+      aScene.SetLinearScale(1000. / anOCCUnitMM);
 
       aScene.SetVrmlDir (aVrmlDir);
       aScene << aStream;
@@ -1876,6 +2063,275 @@ static Standard_Integer meshinfo(Draw_Interpretor& di,
   return 0;
 }
 
+//=======================================================================
+//function : writeply
+//purpose  : write PLY file
+//=======================================================================
+static Standard_Integer WritePly (Draw_Interpretor& theDI,
+                                  Standard_Integer theNbArgs,
+                                  const char** theArgVec)
+{
+  Handle(TDocStd_Document) aDoc;
+  Handle(TDocStd_Application) anApp = DDocStd::GetApplication();
+  TCollection_AsciiString aShapeName, aFileName;
+
+  Standard_Real aDist = 0.0;
+  Standard_Real aDens = Precision::Infinite();
+  Standard_Real aTol  = Precision::Confusion();
+  bool hasColors = true, hasNormals = true, hasTexCoords = false, hasPartId = true, hasFaceId = false;
+  bool isPntSet = false, isDensityPoints = false;
+  TColStd_IndexedDataMapOfStringString aFileInfo;
+  for (Standard_Integer anArgIter = 1; anArgIter < theNbArgs; ++anArgIter)
+  {
+    TCollection_AsciiString anArg (theArgVec[anArgIter]);
+    anArg.LowerCase();
+    if (anArg == "-normal")
+    {
+      hasNormals = Draw::ParseOnOffIterator (theNbArgs, theArgVec, anArgIter);
+    }
+    else if (anArg == "-nonormal")
+    {
+      hasNormals = !Draw::ParseOnOffIterator (theNbArgs, theArgVec, anArgIter);
+    }
+    else if (anArg == "-color"
+          || anArg == "-nocolor"
+          || anArg == "-colors"
+          || anArg == "-nocolors")
+    {
+      hasColors = Draw::ParseOnOffNoIterator (theNbArgs, theArgVec, anArgIter);
+    }
+    else if (anArg == "-uv"
+          || anArg == "-nouv")
+    {
+      hasTexCoords = Draw::ParseOnOffNoIterator (theNbArgs, theArgVec, anArgIter);
+    }
+    else if (anArg == "-partid")
+    {
+      hasPartId = Draw::ParseOnOffNoIterator (theNbArgs, theArgVec, anArgIter);
+      hasFaceId = hasFaceId && !hasPartId;
+    }
+    else if (anArg == "-surfid"
+          || anArg == "-surfaceid"
+          || anArg == "-faceid")
+    {
+      hasFaceId = Draw::ParseOnOffNoIterator (theNbArgs, theArgVec, anArgIter);
+      hasPartId = hasPartId && !hasFaceId;
+    }
+    else if (anArg == "-pntset"
+          || anArg == "-pntcloud"
+          || anArg == "-pointset"
+          || anArg == "-pointcloud"
+          || anArg == "-cloud"
+          || anArg == "-points")
+    {
+      isPntSet = Draw::ParseOnOffIterator (theNbArgs, theArgVec, anArgIter);
+    }
+    else if ((anArg == "-dist"
+           || anArg == "-distance")
+          && anArgIter + 1 < theNbArgs
+          && Draw::ParseReal (theArgVec[anArgIter + 1], aDist))
+    {
+      ++anArgIter;
+      isPntSet = true;
+      if (aDist < 0.0)
+      {
+        theDI << "Syntax error: -distance value should be >= 0.0";
+        return 1;
+      }
+      aDist = Max (aDist, Precision::Confusion());
+    }
+    else if ((anArg == "-dens"
+           || anArg == "-density")
+          && anArgIter + 1 < theNbArgs
+          && Draw::ParseReal (theArgVec[anArgIter + 1], aDens))
+    {
+      ++anArgIter;
+      isDensityPoints = Standard_True;
+      isPntSet = true;
+      if (aDens <= 0.0)
+      {
+        theDI << "Syntax error: -density value should be > 0.0";
+        return 1;
+      }
+    }
+    else if ((anArg == "-tol"
+           || anArg == "-tolerance")
+          && anArgIter + 1 < theNbArgs
+          && Draw::ParseReal (theArgVec[anArgIter + 1], aTol))
+    {
+      ++anArgIter;
+      isPntSet = true;
+      if (aTol < Precision::Confusion())
+      {
+        theDI << "Syntax error: -tol value should be >= " << Precision::Confusion();
+        return 1;
+      }
+    }
+    else if (anArg == "-comments"
+          && anArgIter + 1 < theNbArgs)
+    {
+      aFileInfo.Add ("Comments", theArgVec[++anArgIter]);
+    }
+    else if (anArg == "-author"
+          && anArgIter + 1 < theNbArgs)
+    {
+      aFileInfo.Add ("Author", theArgVec[++anArgIter]);
+    }
+    else if (aDoc.IsNull())
+    {
+      if (aShapeName.IsEmpty())
+      {
+        aShapeName = theArgVec[anArgIter];
+      }
+
+      Standard_CString aNameVar = theArgVec[anArgIter];
+      DDocStd::GetDocument (aNameVar, aDoc, false);
+      if (aDoc.IsNull())
+      {
+        TopoDS_Shape aShape = DBRep::Get (aNameVar);
+        if (!aShape.IsNull())
+        {
+          anApp->NewDocument (TCollection_ExtendedString ("BinXCAF"), aDoc);
+          Handle(XCAFDoc_ShapeTool) aShapeTool = XCAFDoc_DocumentTool::ShapeTool (aDoc->Main());
+          aShapeTool->AddShape (aShape);
+        }
+      }
+    }
+    else if (aFileName.IsEmpty())
+    {
+      aFileName = theArgVec[anArgIter];
+    }
+    else
+    {
+      theDI << "Syntax error at '" << theArgVec[anArgIter] << "'";
+      return 1;
+    }
+  }
+  if (aDoc.IsNull()
+  && !aShapeName.IsEmpty())
+  {
+    theDI << "Syntax error: '" << aShapeName << "' is not a shape nor document";
+    return 1;
+  }
+  else if (aDoc.IsNull()
+        || aFileName.IsEmpty())
+  {
+    theDI << "Syntax error: wrong number of arguments";
+    return 1;
+  }
+
+  TDF_LabelSequence aRootLabels;
+  Handle(XCAFDoc_ShapeTool) aShapeTool = XCAFDoc_DocumentTool::ShapeTool (aDoc->Main());
+  aShapeTool->GetFreeShapes (aRootLabels);
+  if (aRootLabels.IsEmpty())
+  {
+    theDI << "Error: empty document";
+    return 1;
+  }
+
+  if (isPntSet)
+  {
+    class PointCloudPlyWriter : public BRepLib_PointCloudShape, public RWPly_PlyWriterContext
+    {
+    public:
+      PointCloudPlyWriter (Standard_Real theTol)
+      : BRepLib_PointCloudShape (TopoDS_Shape(), theTol) {}
+
+      void AddFaceColor (const TopoDS_Shape& theFace, const Graphic3d_Vec4ub& theColor)
+      { myFaceColor.Bind (theFace, theColor); }
+
+    protected:
+      virtual void addPoint (const gp_Pnt& thePoint,
+                             const gp_Vec& theNorm,
+                             const gp_Pnt2d& theUV,
+                             const TopoDS_Shape& theFace)
+      {
+        Graphic3d_Vec4ub aColor;
+        myFaceColor.Find (theFace, aColor);
+        RWPly_PlyWriterContext::WriteVertex (thePoint,
+                                             Graphic3d_Vec3 ((float )theNorm.X(), (float )theNorm.Y(), (float )theNorm.Z()),
+                                             Graphic3d_Vec2 ((float )theUV.X(), (float )theUV.Y()),
+                                             aColor);
+      }
+
+    private:
+      NCollection_DataMap<TopoDS_Shape, Graphic3d_Vec4ub> myFaceColor;
+    };
+
+    PointCloudPlyWriter aPlyCtx (aTol);
+    aPlyCtx.SetNormals (hasNormals);
+    aPlyCtx.SetColors (hasColors);
+    aPlyCtx.SetTexCoords (hasTexCoords);
+
+    TopoDS_Compound aComp;
+    BRep_Builder().MakeCompound (aComp);
+    for (XCAFPrs_DocumentExplorer aDocExplorer (aDoc, aRootLabels, XCAFPrs_DocumentExplorerFlags_OnlyLeafNodes);
+         aDocExplorer.More(); aDocExplorer.Next())
+    {
+      const XCAFPrs_DocumentNode& aDocNode = aDocExplorer.Current();
+      for (RWMesh_FaceIterator aFaceIter (aDocNode.RefLabel, aDocNode.Location, true, aDocNode.Style); aFaceIter.More(); aFaceIter.Next())
+      {
+        BRep_Builder().Add (aComp, aFaceIter.Face());
+        Graphic3d_Vec4ub aColorVec (255);
+        if (aFaceIter.HasFaceColor())
+        {
+          Graphic3d_Vec4 aColorF = aFaceIter.FaceColor();
+          aColorVec.SetValues ((unsigned char )int(aColorF.r() * 255.0f),
+                               (unsigned char )int(aColorF.g() * 255.0f),
+                               (unsigned char )int(aColorF.b() * 255.0f),
+                               (unsigned char )int(aColorF.a() * 255.0f));
+        }
+        aPlyCtx.AddFaceColor (aFaceIter.Face(), aColorVec);
+      }
+    }
+    aPlyCtx.SetShape (aComp);
+
+    Standard_Integer aNbPoints = isDensityPoints
+                               ? aPlyCtx.NbPointsByDensity (aDens)
+                               : aPlyCtx.NbPointsByTriangulation();
+    if (aNbPoints <= 0)
+    {
+      theDI << "Error: unable to generate points";
+      return 0;
+    }
+
+    if (!aPlyCtx.Open (aFileName)
+     || !aPlyCtx.WriteHeader (aNbPoints, 0, TColStd_IndexedDataMapOfStringString()))
+    {
+      theDI << "Error: unable to create file '" << aFileName << "'";
+      return 0;
+    }
+
+    Standard_Boolean isDone = isDensityPoints
+                            ? aPlyCtx.GeneratePointsByDensity (aDens)
+                            : aPlyCtx.GeneratePointsByTriangulation();
+    if (!isDone)
+    {
+      theDI << "Error: Point cloud was not generated in file '" << aFileName << "'";
+    }
+    else if (!aPlyCtx.Close())
+    {
+      theDI << "Error: Point cloud file '" << aFileName << "' was not written";
+    }
+    else
+    {
+      theDI << aNbPoints;
+    }
+  }
+  else
+  {
+    Handle(Draw_ProgressIndicator) aProgress = new Draw_ProgressIndicator (theDI, 1);
+    RWPly_CafWriter aPlyCtx (aFileName);
+    aPlyCtx.SetNormals (hasNormals);
+    aPlyCtx.SetColors (hasColors);
+    aPlyCtx.SetTexCoords (hasTexCoords);
+    aPlyCtx.SetPartId (hasPartId);
+    aPlyCtx.SetFaceId (hasFaceId);
+    aPlyCtx.Perform (aDoc, aFileInfo, aProgress->Start());
+  }
+  return 0;
+}
+
 //-----------------------------------------------------------------------------
 
 void  XSDRAWSTLVRML::InitCommands (Draw_Interpretor& theCommands)
@@ -1884,7 +2340,7 @@ void  XSDRAWSTLVRML::InitCommands (Draw_Interpretor& theCommands)
   //XSDRAW::LoadDraw(theCommands);
 
   theCommands.Add ("ReadGltf",
-                   "ReadGltf Doc file [-parallel {on|off}] [-listExternalFiles] [-noCreateDoc] [-doublePrecision {on|off}]"
+                   "ReadGltf Doc file [-parallel {on|off}] [-listExternalFiles] [-noCreateDoc] [-doublePrecision {on|off}] [-assetInfo]"
                    "\n\t\t: Read glTF file into XDE document."
                    "\n\t\t:   -listExternalFiles do not read mesh and only list external files"
                    "\n\t\t:   -noCreateDoc read into existing XDE document"
@@ -1893,21 +2349,31 @@ void  XSDRAWSTLVRML::InitCommands (Draw_Interpretor& theCommands)
                    "\n\t\t:   -skipLateLoading data loading is skipped and can be performed later"
                    "\n\t\t:                    (false by default)"
                    "\n\t\t:   -keepLate data is loaded into itself with preservation of information"
-                   "\n\t\t:             about deferred storage to load/unload this data later.",
+                   "\n\t\t:             about deferred storage to load/unload this data later."
+                   "\n\t\t:   -allScenes load all scenes defined in the document instead of default one (false by default)"
                    "\n\t\t:   -toPrintDebugInfo print additional debug information during data reading"
+                   "\n\t\t:   -assetInfo print asset information",
                    __FILE__, ReadGltf, g);
   theCommands.Add ("readgltf",
                    "readgltf shape file"
                    "\n\t\t: Same as ReadGltf but reads glTF file into a shape instead of a document.",
                    __FILE__, ReadGltf, g);
   theCommands.Add ("WriteGltf",
-                   "WriteGltf Doc file [-trsfFormat {compact|TRS|mat4}=compact]"
+                   "WriteGltf Doc file [-trsfFormat {compact|TRS|mat4}]=compact"
+           "\n\t\t:                    [-systemCoordSys {Zup|Yup}]=Zup"
            "\n\t\t:                    [-comments Text] [-author Name]"
-           "\n\t\t:                    [-forceUVExport] [-texturesSeparate]"
+           "\n\t\t:                    [-forceUVExport]=0 [-texturesSeparate]=0 [-mergeFaces]=0 [-splitIndices16]=0"
+           "\n\t\t:                    [-nodeNameFormat {empty|product|instance|instOrProd|prodOrInst|prodAndInst|verbose}]=instOrProd"
+           "\n\t\t:                    [-meshNameFormat {empty|product|instance|instOrProd|prodOrInst|prodAndInst|verbose}]=product"
            "\n\t\t: Write XDE document into glTF file."
            "\n\t\t:   -trsfFormat preferred transformation format"
-           "\n\t\t:   -forceUVExport always export UV coordinates"
-           "\n\t\t:   -texturesSeparate write textures to separate files",
+           "\n\t\t:   -systemCoordSys system coordinate system; Zup when not specified"
+           "\n\t\t:   -mergeFaces     merge Faces within the same Mesh"
+           "\n\t\t:   -splitIndices16 split Faces to keep 16-bit indices when -mergeFaces is enabled"
+           "\n\t\t:   -forceUVExport  always export UV coordinates"
+           "\n\t\t:   -texturesSeparate write textures to separate files"
+           "\n\t\t:   -nodeNameFormat name format for Nodes"
+           "\n\t\t:   -meshNameFormat name format for Meshes",
                    __FILE__, WriteGltf, g);
   theCommands.Add ("writegltf",
                    "writegltf shape file",
@@ -1915,10 +2381,11 @@ void  XSDRAWSTLVRML::InitCommands (Draw_Interpretor& theCommands)
   theCommands.Add ("writevrml", "shape file [version VRML#1.0/VRML#2.0 (1/2): 2 by default] [representation shaded/wireframe/both (0/1/2): 1 by default]",__FILE__,writevrml,g);
   theCommands.Add ("writestl",  "shape file [ascii/binary (0/1) : 1 by default] [InParallel (0/1) : 0 by default]",__FILE__,writestl,g);
   theCommands.Add ("readstl",
-                   "readstl shape file [-brep]"
+                   "readstl shape file [-brep] [-mergeAngle Angle]"
                    "\n\t\t: Reads STL file and creates a new shape with specified name."
                    "\n\t\t: When -brep is specified, creates a Compound of per-triangle Faces."
-                   "\n\t\t: Single triangulation-only Face is created otherwise (default).",
+                   "\n\t\t: Single triangulation-only Face is created otherwise (default)."
+                   "\n\t\t: -mergeAngle specifies maximum angle in degrees between triangles to merge equal nodes; disabled by default.",
                    __FILE__, readstl, g);
   theCommands.Add ("loadvrml" , "shape file",__FILE__,loadvrml,g);
   theCommands.Add ("ReadObj",
@@ -1971,6 +2438,25 @@ void  XSDRAWSTLVRML::InitCommands (Draw_Interpretor& theCommands)
   theCommands.Add ("meshdeform",      "display deformed mesh",                        __FILE__, meshdeform,      g );
   theCommands.Add ("mesh_edge_width", "set width of edges",                           __FILE__, mesh_edge_width, g );
   theCommands.Add ("meshinfo",        "displays the number of nodes and triangles",   __FILE__, meshinfo,        g );
+  theCommands.Add ("WritePly", R"(
+WritePly Doc file [-normals {0|1}]=1 [-colors {0|1}]=1 [-uv {0|1}]=0 [-partId {0|1}]=1 [-faceId {0|1}]=0
+                  [-pointCloud {0|1}]=0 [-distance Value]=0.0 [-density Value] [-tolerance Value]
+Write document or triangulated shape into PLY file.
+ -normals write per-vertex normals
+ -colors  write per-vertex colors
+ -uv      write per-vertex UV coordinates
+ -partId  write per-element part index (alternative to -faceId)
+ -faceId  write per-element face index (alternative to -partId)
+
+Generate point cloud out of the shape and write it into PLY file.
+ -pointCloud write point cloud instead without triangulation indices
+ -distance   sets distance from shape into the range [0, Value];
+ -density    sets density of points to generate randomly on surface;
+ -tolerance  sets tolerance; default value is Precision::Confusion();
+)", __FILE__, WritePly, g);
+  theCommands.Add ("writeply",
+                   "writeply shape file",
+                   __FILE__, WritePly, g);
 }
 
 //==============================================================================

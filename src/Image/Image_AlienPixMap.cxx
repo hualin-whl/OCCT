@@ -35,6 +35,8 @@
   #ifdef _MSC_VER
     #pragma comment(lib, "Ole32.lib")
   #endif
+#elif defined(__EMSCRIPTEN__)
+  #include <emscripten/emscripten.h>
 #endif
 
 #include <Image_AlienPixMap.hxx>
@@ -64,6 +66,8 @@ namespace
       case FIT_RGBF:   return Image_Format_RGBF;
       case FIT_RGBAF:  return Image_Format_RGBAF;
       case FIT_FLOAT:  return Image_Format_GrayF;
+      case FIT_INT16:
+      case FIT_UINT16: return Image_Format_Gray16;
       case FIT_BITMAP:
       {
         switch (theColorTypeFI)
@@ -116,6 +120,8 @@ namespace
       case Image_Format_Gray:
       case Image_Format_Alpha:
         return FIT_BITMAP;
+      case Image_Format_Gray16:
+        return FIT_UINT16;
       default:
         return FIT_UNKNOWN;
     }
@@ -302,6 +308,10 @@ namespace
     {
       return Image_Format_Gray;
     }
+    else if (theFormat == GUID_WICPixelFormat16bppGray)
+    {
+      return Image_Format_Gray16;
+    }
     return Image_Format_UNKNOWN;
   }
 
@@ -316,6 +326,7 @@ namespace
       case Image_Format_BGR:    return GUID_WICPixelFormat24bppBGR;
       case Image_Format_Gray:   return GUID_WICPixelFormat8bppGray;
       case Image_Format_Alpha:  return GUID_WICPixelFormat8bppGray; // GUID_WICPixelFormat8bppAlpha
+      case Image_Format_Gray16: return GUID_WICPixelFormat16bppGray;
       case Image_Format_GrayF:  // GUID_WICPixelFormat32bppGrayFloat
       case Image_Format_AlphaF:
       case Image_Format_RGBAF:  // GUID_WICPixelFormat128bppRGBAFloat
@@ -492,6 +503,12 @@ void Image_AlienPixMap::Clear()
   if (myLibImage != NULL)
   {
     FreeImage_Unload (myLibImage);
+    myLibImage = NULL;
+  }
+#elif defined(__EMSCRIPTEN__)
+  if (myLibImage != NULL)
+  {
+    free ((void* )myLibImage);
     myLibImage = NULL;
   }
 #endif
@@ -798,6 +815,39 @@ bool Image_AlienPixMap::Load (std::istream& theStream,
 
   return Load (&aBuff.ChangeFirst(), aBuff.Size(), theFilePath);
 }
+#elif defined(__EMSCRIPTEN__)
+bool Image_AlienPixMap::Load (std::istream& ,
+                              const TCollection_AsciiString& )
+{
+  Clear();
+  Message::SendFail ("Error: no image library available for decoding stream");
+  return false;
+}
+bool Image_AlienPixMap::Load (const Standard_Byte* theData,
+                              Standard_Size theLength,
+                              const TCollection_AsciiString& theImagePath)
+{
+  Clear();
+  if (theData != NULL)
+  {
+    (void )theLength;
+    Message::SendFail ("Error: no image library available for decoding in-memory buffer");
+    return false;
+  }
+
+  int aSizeX = 0, aSizeY = 0;
+  char* anImgData = emscripten_get_preloaded_image_data (theImagePath.ToCString(), &aSizeX, &aSizeY);
+  if (anImgData == NULL)
+  {
+    Message::SendFail() << "Error: image '" << theImagePath << "' is not preloaded";
+    return false;
+  }
+
+  Image_PixMap::InitWrapper (Image_Format_RGBA, (Standard_Byte* )anImgData, aSizeX, aSizeY);
+  SetTopDown (true);
+  myLibImage = (FIBITMAP* )anImgData;
+  return true;
+}
 #else
 bool Image_AlienPixMap::Load (std::istream& ,
                               const TCollection_AsciiString& )
@@ -1040,7 +1090,8 @@ bool Image_AlienPixMap::Save (const TCollection_AsciiString& theFileName)
   {
     aFileFormat = GUID_ContainerFormatJpeg;
   }
-  else if (aFileNameLower.EndsWith (".tiff"))
+  else if (aFileNameLower.EndsWith (".tiff")
+        || aFileNameLower.EndsWith (".tif"))
   {
     aFileFormat = GUID_ContainerFormatTiff;
   }

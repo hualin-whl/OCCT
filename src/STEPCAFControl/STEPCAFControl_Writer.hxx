@@ -37,7 +37,6 @@
 
 class XSControl_WorkSession;
 class TDocStd_Document;
-class TCollection_AsciiString;
 class STEPCAFControl_ExternFile;
 class TopoDS_Shape;
 
@@ -88,6 +87,12 @@ public:
   
   //! Method to transfer part of the document specified by label
   Standard_EXPORT Standard_Boolean Transfer (const TDF_Label& L,
+                                             const STEPControl_StepModelType mode = STEPControl_AsIs,
+                                             const Standard_CString multi = 0,
+                                             const Message_ProgressRange& theProgress = Message_ProgressRange());
+
+  //! Mehod to writing sequence of root assemblies or part of the file specified by use by one label 
+  Standard_EXPORT Standard_Boolean Transfer (const TDF_LabelSequence& L,
                                              const STEPControl_StepModelType mode = STEPControl_AsIs,
                                              const Standard_CString multi = 0,
                                              const Message_ProgressRange& theProgress = Message_ProgressRange());
@@ -155,15 +160,7 @@ public:
   
   Standard_EXPORT Standard_Boolean GetMaterialMode() const;
 
-
-
-
 protected:
-  //! Mehod to writing sequence of root assemblies or part of the file specified by use by one label 
-  Standard_EXPORT Standard_Boolean Transfer (const TDF_LabelSequence& L,
-                                             const STEPControl_StepModelType mode = STEPControl_AsIs,
-                                             const Standard_CString multi = 0,
-                                             const Message_ProgressRange& theProgress = Message_ProgressRange());
   
   //! Transfers labels to a STEP model
   //! Returns True if translation is OK
@@ -215,27 +212,43 @@ protected:
   //! Write SHUO assigned to specified component, to STEP model
   Standard_EXPORT Standard_Boolean WriteSHUOs (const Handle(XSControl_WorkSession)& WS, const TDF_LabelSequence& labels);
 
-  
+  //! Finds length units located in root of label
+  //! If it exists, initializes local length unit from it
+  //! Else initializes according to Cascade length unit
+  Standard_EXPORT void prepareUnit(const TDF_Label& theLabel,
+                                   const Handle(StepData_StepModel)& theModel);
 
 private:
+
   Standard_EXPORT Handle(StepRepr_ShapeAspect) WriteShapeAspect(const Handle(XSControl_WorkSession) &WS,
     const TDF_Label theLabel, const TopoDS_Shape theShape, Handle(StepRepr_RepresentationContext)& theRC,
     Handle(StepAP242_GeometricItemSpecificUsage)& theGISU);
 
-  Standard_EXPORT void WritePresentation(const Handle(XSControl_WorkSession) &WS, const TopoDS_Shape thePresentation,
-    const Handle(TCollection_HAsciiString)& thePrsName, const Standard_Boolean hasSemantic, const Standard_Boolean hasPlane,
-    const gp_Ax2 theAnnotationPlane, const gp_Pnt theTextPosition, const Handle(Standard_Transient) theDimension);
+  Standard_EXPORT void WritePresentation(const Handle(XSControl_WorkSession)&    WS,
+                                         const TopoDS_Shape&                     thePresentation,
+                                         const Handle(TCollection_HAsciiString)& thePrsName,
+                                         const Standard_Boolean                  hasSemantic,
+                                         const Standard_Boolean                  hasPlane,
+                                         const gp_Ax2&                           theAnnotationPlane,
+                                         const gp_Pnt&                           theTextPosition,
+                                         const Handle(Standard_Transient)        theDimension);
 
-  Standard_EXPORT Handle(StepDimTol_Datum) WriteDatumAP242(const Handle(XSControl_WorkSession) &WS, const TDF_LabelSequence theShapeL,
-    const TDF_Label theDatumL, const Standard_Boolean isFirstDTarget, const Handle(StepDimTol_Datum) theWrittenDatum);
+  Standard_EXPORT Handle(StepDimTol_Datum) WriteDatumAP242(const Handle(XSControl_WorkSession)& WS,
+                                                           const TDF_LabelSequence&             theShapeL,
+                                                           const TDF_Label&                     theDatumL,
+                                                           const Standard_Boolean               isFirstDTarget,
+                                                           const Handle(StepDimTol_Datum)       theWrittenDatum);
 
   Standard_EXPORT void WriteToleranceZone(const Handle(XSControl_WorkSession) &WS, const Handle(XCAFDimTolObjects_GeomToleranceObject)& theObject,
     const Handle(StepDimTol_GeometricTolerance)& theEntity, const Handle(StepRepr_RepresentationContext)& theRC);
 
-  Standard_EXPORT void WriteGeomTolerance(const Handle(XSControl_WorkSession) &WS, const TDF_LabelSequence theShapeSeqL,
-    const TDF_Label theGeomTolL, const Handle(StepDimTol_HArray1OfDatumSystemOrReference)& theDatumSystem,
-    const Handle(StepRepr_RepresentationContext)& theRC);
+  Standard_EXPORT void WriteGeomTolerance(const Handle(XSControl_WorkSession)&                      WS,
+                                          const TDF_LabelSequence&                                  theShapeSeqL,
+                                          const TDF_Label&                                          theGeomTolL,
+                                          const Handle(StepDimTol_HArray1OfDatumSystemOrReference)& theDatumSystem,
+                                          const Handle(StepRepr_RepresentationContext)&             theRC);
 
+private:
 
 
   STEPControl_Writer myWriter;

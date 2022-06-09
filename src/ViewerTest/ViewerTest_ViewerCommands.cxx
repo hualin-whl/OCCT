@@ -55,7 +55,7 @@
 #include <Graphic3d_GraphicDriver.hxx>
 #include <Graphic3d_GraphicDriverFactory.hxx>
 #include <Graphic3d_NameOfTextureEnv.hxx>
-#include <Graphic3d_Texture2Dmanual.hxx>
+#include <Graphic3d_Texture2D.hxx>
 #include <Graphic3d_TextureEnv.hxx>
 #include <Graphic3d_TextureParams.hxx>
 #include <Graphic3d_TypeOfTextureFilter.hxx>
@@ -191,1228 +191,33 @@ static struct
   Quantity_Color GradientColor1;
   Quantity_Color GradientColor2;
   Aspect_GradientFillMethod FillMethod;
-} ViewerTest_DefaultBackground = { Quantity_NOC_BLACK, Quantity_NOC_BLACK, Quantity_NOC_BLACK, Aspect_GFM_NONE };
+
+  //! Sets the gradient filling for a background in a default viewer.
+  void SetDefaultGradient()
+  {
+    for (NCollection_DoubleMap<TCollection_AsciiString, Handle (AIS_InteractiveContext)>::Iterator aCtxIter (ViewerTest_myContexts);
+         aCtxIter.More(); aCtxIter.Next())
+    {
+      const Handle (V3d_Viewer)& aViewer = aCtxIter.Value()->CurrentViewer();
+      aViewer->SetDefaultBgGradientColors (GradientColor1, GradientColor2, FillMethod);
+    }
+  }
+
+  //! Sets the color used for filling a background in a default viewer.
+  void SetDefaultColor()
+  {
+    for (NCollection_DoubleMap<TCollection_AsciiString, Handle (AIS_InteractiveContext)>::Iterator aCtxIter (ViewerTest_myContexts);
+         aCtxIter.More(); aCtxIter.Next())
+    {
+      const Handle (V3d_Viewer)& aViewer = aCtxIter.Value()->CurrentViewer();
+      aViewer->SetDefaultBackgroundColor (FlatColor);
+    }
+  }
+
+} ViewerTest_DefaultBackground = { Quantity_NOC_BLACK, Quantity_NOC_BLACK, Quantity_NOC_BLACK, Aspect_GradientFillMethod_None };
 
 //==============================================================================
 //  EVENT GLOBAL VARIABLES
-//==============================================================================
-
-Standard_Boolean TheIsAnimating = Standard_False;
-
-namespace
-{
-
-  //! Checks if some set is a subset of other set
-  //! @tparam TheSuperSet the type of the superset
-  //! @tparam TheSubSet the type of the subset
-  //! @param theSuperSet the superset
-  //! @param theSubSet the subset to be checked
-  //! @return true if the superset includes subset, or false otherwise
-  template <typename TheSuperSet, typename TheSubSet>
-  static bool includes (const TheSuperSet& theSuperSet, const TheSubSet& theSubSet)
-  {
-    return std::includes (theSuperSet.begin(), theSuperSet.end(), theSubSet.begin(), theSubSet.end());
-  }
-
-  //! A variable set of keys for command-line options.
-  //! It includes a set of mandatory keys and a set of all possible keys.
-  class CommandOptionKeyVariableSet
-  {
-  public:
-    //! Default constructor
-    CommandOptionKeyVariableSet()
-    {
-    }
-
-    //! Constructor
-    //! @param theMandatoryKeySet the set of the mandatory option keys
-    //! @param theAdditionalKeySet the set of additional options that could be omitted
-    CommandOptionKeyVariableSet (
-      const ViewerTest_CommandOptionKeySet& theMandatoryKeySet,
-      const ViewerTest_CommandOptionKeySet& theAdditionalKeySet = ViewerTest_CommandOptionKeySet())
-    : myMandatoryKeySet (theMandatoryKeySet)
-    {
-      std::set_union (theMandatoryKeySet.begin(),
-                      theMandatoryKeySet.end(),
-                      theAdditionalKeySet.begin(),
-                      theAdditionalKeySet.end(),
-                      std::inserter (myFullKeySet, myFullKeySet.begin()));
-    }
-
-    //! Checks if the set of option keys fits to the current variable set (it must contain all mandatory keys
-    //! and be contained in the full key set)
-    //! @param theCheckedKeySet the set of option keys to be checked
-    bool IsInSet (const ViewerTest_CommandOptionKeySet& theCheckedKeySet) const
-    {
-      return includes (theCheckedKeySet, myMandatoryKeySet) && includes (myFullKeySet, theCheckedKeySet);
-    }
-
-  private:
-    //! A set of mandatory command-line option keys
-    ViewerTest_CommandOptionKeySet myMandatoryKeySet;
-
-    //! A full set of command-line option keys (includes mandatory and additional option keys)
-    ViewerTest_CommandOptionKeySet myFullKeySet;
-  };
-
-  //! Gets some code by its name
-  //! @tparam TheCode the type of a code to be found
-  //! @param theCodeNameMap the map from code names to codes
-  //! @param theCodeName the name of a code to be found
-  //! @param theCode the code to be found
-  //! @return true if a code is found, or false otherwise
-  template <typename TheCode>
-  static bool getSomeCodeByName (const std::map<TCollection_AsciiString, TheCode>& theCodeNameMap,
-                                 TCollection_AsciiString                           theCodeName,
-                                 TheCode&                                          theCode)
-  {
-    theCodeName.LowerCase();
-    const typename std::map<TCollection_AsciiString, TheCode>::const_iterator aCodeIterator = theCodeNameMap.find (
-      theCodeName);
-    if (aCodeIterator == theCodeNameMap.end())
-    {
-      return false;
-    }
-    theCode = aCodeIterator->second;
-    return true;
-  }
-
-  // Defines possible commands related to background changing
-  enum BackgroundCommand
-  {
-    BackgroundCommand_Main,              //!< The main command that manages other commands through options
-    BackgroundCommand_Image,             //!< Sets an image as a background
-    BackgroundCommand_ImageMode,         //!< Changes a background image mode
-    BackgroundCommand_Gradient,          //!< Sets a gradient as a background
-    BackgroundCommand_GradientMode,      //!< Changes a background gradient mode
-    BackgroundCommand_Color,             //!< Fills background with a specified color
-    BackgroundCommand_Default            //!< Sets the background default color or gradient
-  };
-
-  //! Map from background command names to its codes
-  typedef std::map<TCollection_AsciiString, BackgroundCommand> BackgroundCommandNameMap;
-
-  //! Creates a map from background command names to its codes
-  //! @return a map from background command names to its codes
-  static BackgroundCommandNameMap createBackgroundCommandNameMap()
-  {
-    BackgroundCommandNameMap aBackgroundCommandNameMap;
-    aBackgroundCommandNameMap["vbackground"]      = BackgroundCommand_Main;
-    aBackgroundCommandNameMap["vsetbg"]           = BackgroundCommand_Image;
-    aBackgroundCommandNameMap["vsetbgmode"]       = BackgroundCommand_ImageMode;
-    aBackgroundCommandNameMap["vsetgradientbg"]   = BackgroundCommand_Gradient;
-    aBackgroundCommandNameMap["vsetgrbgmode"]     = BackgroundCommand_GradientMode;
-    aBackgroundCommandNameMap["vsetcolorbg"]      = BackgroundCommand_Color;
-    aBackgroundCommandNameMap["vsetdefaultbg"]    = BackgroundCommand_Default;
-    return aBackgroundCommandNameMap;
-  }
-
-  //! Gets a background command by its name
-  //! @param theBackgroundCommandName the name of the background command
-  //! @param theBackgroundCommand the background command to be found
-  //! @return true if a background command is found, or false otherwise
-  static bool getBackgroundCommandByName (const TCollection_AsciiString& theBackgroundCommandName,
-                                          BackgroundCommand&             theBackgroundCommand)
-  {
-    static const BackgroundCommandNameMap THE_BACKGROUND_COMMAND_NAME_MAP = createBackgroundCommandNameMap();
-    return getSomeCodeByName (THE_BACKGROUND_COMMAND_NAME_MAP, theBackgroundCommandName, theBackgroundCommand);
-  }
-
-  //! Map from background image fill method names to its codes
-  typedef std::map<TCollection_AsciiString, Aspect_FillMethod> BackgroundImageFillMethodNameMap;
-
-  //! Creates a map from background image fill method names to its codes
-  //! @return a map from background image fill method names to its codes
-  static BackgroundImageFillMethodNameMap createBackgroundImageFillMethodNameMap()
-  {
-    BackgroundImageFillMethodNameMap aBackgroundImageFillMethodNameMap;
-    aBackgroundImageFillMethodNameMap["none"]     = Aspect_FM_NONE;
-    aBackgroundImageFillMethodNameMap["centered"] = Aspect_FM_CENTERED;
-    aBackgroundImageFillMethodNameMap["tiled"]    = Aspect_FM_TILED;
-    aBackgroundImageFillMethodNameMap["stretch"]  = Aspect_FM_STRETCH;
-    return aBackgroundImageFillMethodNameMap;
-  }
-
-  //! Gets a background image fill method by its name
-  //! @param theBackgroundImageFillMethodName the name of the background image fill method
-  //! @param theBackgroundImageFillMethod the background image fill method to be found
-  //! @return true if a background image fill method is found, or false otherwise
-  static bool getBackgroundImageFillMethodByName (const TCollection_AsciiString& theBackgroundImageFillMethodName,
-                                                  Aspect_FillMethod&             theBackgroundImageFillMethod)
-  {
-    static const BackgroundImageFillMethodNameMap THE_BACKGROUND_IMAGE_FILL_METHOD_NAME_MAP =
-      createBackgroundImageFillMethodNameMap();
-    return getSomeCodeByName (THE_BACKGROUND_IMAGE_FILL_METHOD_NAME_MAP,
-                              theBackgroundImageFillMethodName,
-                              theBackgroundImageFillMethod);
-  }
-
-  //! Map from background gradient fill method names to its codes
-  typedef std::map<TCollection_AsciiString, Aspect_GradientFillMethod> BackgroundGradientFillMethodNameMap;
-
-  //! Creates a map from background gradient fill method names to its codes
-  //! @return a map from background gradient fill method names to its codes
-  static BackgroundGradientFillMethodNameMap createBackgroundGradientFillMethodNameMap()
-  {
-    BackgroundGradientFillMethodNameMap aBackgroundGradientFillMethodNameMap;
-    aBackgroundGradientFillMethodNameMap["none"]       = Aspect_GFM_NONE;
-    aBackgroundGradientFillMethodNameMap["hor"]        = Aspect_GFM_HOR;
-    aBackgroundGradientFillMethodNameMap["horizontal"] = Aspect_GFM_HOR;
-    aBackgroundGradientFillMethodNameMap["ver"]        = Aspect_GFM_VER;
-    aBackgroundGradientFillMethodNameMap["vertical"]   = Aspect_GFM_VER;
-    aBackgroundGradientFillMethodNameMap["diag1"]      = Aspect_GFM_DIAG1;
-    aBackgroundGradientFillMethodNameMap["diagonal1"]  = Aspect_GFM_DIAG1;
-    aBackgroundGradientFillMethodNameMap["diag2"]      = Aspect_GFM_DIAG2;
-    aBackgroundGradientFillMethodNameMap["diagonal2"]  = Aspect_GFM_DIAG2;
-    aBackgroundGradientFillMethodNameMap["corner1"]    = Aspect_GFM_CORNER1;
-    aBackgroundGradientFillMethodNameMap["corner2"]    = Aspect_GFM_CORNER2;
-    aBackgroundGradientFillMethodNameMap["corner3"]    = Aspect_GFM_CORNER3;
-    aBackgroundGradientFillMethodNameMap["corner4"]    = Aspect_GFM_CORNER4;
-    return aBackgroundGradientFillMethodNameMap;
-  }
-
-  //! Gets a gradient fill method by its name
-  //! @param theBackgroundGradientFillMethodName the name of the gradient fill method
-  //! @param theBackgroundGradientFillMethod the gradient fill method to be found
-  //! @return true if a gradient fill method is found, or false otherwise
-  static bool getBackgroundGradientFillMethodByName (const TCollection_AsciiString& theBackgroundGradientFillMethodName,
-                                                     Aspect_GradientFillMethod&     theBackgroundGradientFillMethod)
-  {
-    static const BackgroundGradientFillMethodNameMap THE_BACKGROUND_GRADIENT_FILL_METHOD_NAME_MAP =
-      createBackgroundGradientFillMethodNameMap();
-    return getSomeCodeByName (THE_BACKGROUND_GRADIENT_FILL_METHOD_NAME_MAP,
-                              theBackgroundGradientFillMethodName,
-                              theBackgroundGradientFillMethod);
-  }
-
-  //! Changes the background in accordance with passed command line options
-  class BackgroundChanger
-  {
-  public:
-    //! Constructor. Prepares the command parser
-    BackgroundChanger()
-    {
-      prepareCommandParser();
-    }
-
-    //! Processes the command line and changes the background
-    //! @param theDrawInterpretor the interpreter of the Draw Harness application
-    //! @param theNumberOfCommandLineArguments the number of passed command line arguments
-    //! @param theCommandLineArguments the array of command line arguments
-    bool ProcessCommandLine (Draw_Interpretor&        theDrawInterpretor,
-                             const Standard_Integer   theNumberOfCommandLineArguments,
-                             const char* const* const theCommandLineArguments)
-    {
-      const char* const aBackgroundCommandName = theCommandLineArguments[0];
-      BackgroundCommand aBackgroundCommand = BackgroundCommand_Main;
-      if (!getBackgroundCommandByName (aBackgroundCommandName, aBackgroundCommand))
-      {
-        return false;
-      }
-      addCommandDescription (aBackgroundCommand);
-      myCommandParser.Parse (theNumberOfCommandLineArguments, theCommandLineArguments);
-      return processCommandOptions (aBackgroundCommandName, aBackgroundCommand, theDrawInterpretor);
-    }
-
-  private:
-    //! The type of functions that are able to set gradient background filling
-    typedef void SetGradientFunction (const Quantity_Color& /* theColor1 */,
-                                      const Quantity_Color& /* theColor2 */,
-                                      const Aspect_GradientFillMethod /* theGradientMode */);
-
-    //! The type of functions that are able to fill a background with a specific color
-    typedef void SetColorFunction (const Quantity_Color& /* theColor */);
-
-    //! the command parser used to parse command line options and its arguments
-    ViewerTest_CmdParser myCommandParser;
-
-    //! the option key for the command that sets an image as a background
-    ViewerTest_CommandOptionKey myImageOptionKey;
-
-    //! the option key for the command that sets a background image fill type
-    ViewerTest_CommandOptionKey myImageModeOptionKey;
-
-    //! the option key for the command that sets a gradient filling for the background
-    ViewerTest_CommandOptionKey myGradientOptionKey;
-
-    //! the option key for the command that sets a background gradient filling method
-    ViewerTest_CommandOptionKey myGradientModeOptionKey;
-
-    //! the option key for the command that fills background with a specific color
-    ViewerTest_CommandOptionKey myColorOptionKey;
-
-    //! the option key for the command that sets default background gradient or color
-    ViewerTest_CommandOptionKey myDefaultOptionKey;
-
-    //! the option key for the command that sets an environment cubemap as a background
-    ViewerTest_CommandOptionKey myCubeMapOptionKey;
-
-    //! the option key for the command that defines order of tiles in one image packed cubemap
-    ViewerTest_CommandOptionKey myCubeMapOrderOptionKey;
-
-    //! the option key for the command that sets inversion of Z axis for background cubemap
-    ViewerTest_CommandOptionKey myCubeMapInvertedZOptionKey;
-
-    //! the option key for the command that allows skip IBL map generation
-    ViewerTest_CommandOptionKey myCubeMapDoNotGenPBREnvOptionKey;
-
-    //! the variable set of options that are allowed for the old scenario (without any option passed)
-    CommandOptionKeyVariableSet myUnnamedOptionVariableSet;
-
-    //! the variable set of options that are allowed for setting an environment cubemap as background
-    CommandOptionKeyVariableSet myCubeMapOptionVariableSet;
-
-    //! the variable set of options that are allowed for setting an image as a background
-    CommandOptionKeyVariableSet myImageOptionVariableSet;
-
-    //! the variable set of options that are allowed for setting a background image fill type
-    CommandOptionKeyVariableSet myImageModeOptionVariableSet;
-
-    //! the variable set of options that are allowed for setting a gradient filling for the background
-    CommandOptionKeyVariableSet myGradientOptionVariableSet;
-
-    //! the variable set of options that are allowed for setting a background gradient filling method
-    CommandOptionKeyVariableSet myGradientModeOptionVariableSet;
-
-    //! the variable set of options that are allowed for filling a background with a specific color
-    CommandOptionKeyVariableSet myColorOptionVariableSet;
-
-    //! the variable set of options that are allowed for setting a default background gradient
-    CommandOptionKeyVariableSet myDefaultGradientOptionVariableSet;
-
-    //! the variable set of options that are allowed for setting a default background color
-    CommandOptionKeyVariableSet myDefaultColorOptionVariableSet;
-
-    //! the variable set of options that are allowed for printing help
-    CommandOptionKeyVariableSet myHelpOptionVariableSet;
-
-    //! Adds options to command parser
-    void addOptionsToCommandParser()
-    {
-      myImageOptionKey     = myCommandParser.AddOption ("imageFile|image|imgFile|img",
-                                                    "filename of image used as background");
-      myImageModeOptionKey = myCommandParser.AddOption (
-        "imageMode|imgMode", "image fill type, should be one of CENTERED, TILED, STRETCH, NONE");
-      myGradientOptionKey = myCommandParser.AddOption ("gradient|grad|gr",
-                                                       "sets background gradient starting and ending colors");
-      myGradientModeOptionKey =
-        myCommandParser.AddOption ("gradientMode|gradMode|gradMd|grMode|grMd",
-                                   "gradient fill method, should be one of NONE, HOR[IZONTAL], VER[TICAL], "
-                                   "DIAG[ONAL]1, DIAG[ONAL]2, CORNER1, CORNER2, CORNER3, CORNER4");
-      myColorOptionKey   = myCommandParser.AddOption ("color|col", "background color");
-      myDefaultOptionKey = myCommandParser.AddOption ("default|def", "sets background default gradient or color");
-
-      myCubeMapOptionKey           = myCommandParser.AddOption ("cubemap|cmap|cm", "background cubemap");
-      myCubeMapOrderOptionKey      = myCommandParser.AddOption ("order|o", "order of sides in one image packed cubemap");
-      myCubeMapInvertedZOptionKey = myCommandParser.AddOption (
-        "invertedz|invz|iz", "whether Z axis is inverted or not during background cubemap rendering");
-      myCubeMapDoNotGenPBREnvOptionKey = myCommandParser.AddOption ("nopbrenv", "whether IBL map generation should be skipped");
-    }
-
-    //! Creates option sets used to determine if a passed option set is valid or not
-    void createOptionSets()
-    {
-      ViewerTest_CommandOptionKeySet anUnnamedOptionSet;
-      anUnnamedOptionSet.insert (ViewerTest_CmdParser::THE_UNNAMED_COMMAND_OPTION_KEY);
-      myUnnamedOptionVariableSet = CommandOptionKeyVariableSet (anUnnamedOptionSet);
-
-      ViewerTest_CommandOptionKeySet aCubeMapOptionSet;
-      aCubeMapOptionSet.insert (myCubeMapOptionKey);
-      ViewerTest_CommandOptionKeySet aCubeMapAdditionalOptionKeySet;
-      aCubeMapAdditionalOptionKeySet.insert (myCubeMapInvertedZOptionKey);
-      aCubeMapAdditionalOptionKeySet.insert (myCubeMapDoNotGenPBREnvOptionKey);
-      aCubeMapAdditionalOptionKeySet.insert (myCubeMapOrderOptionKey);
-      myCubeMapOptionVariableSet     = CommandOptionKeyVariableSet (aCubeMapOptionSet, aCubeMapAdditionalOptionKeySet);
-
-      ViewerTest_CommandOptionKeySet anImageOptionSet;
-      anImageOptionSet.insert (myImageOptionKey);
-      ViewerTest_CommandOptionKeySet anImageModeOptionSet;
-      anImageModeOptionSet.insert (myImageModeOptionKey);
-      myImageOptionVariableSet     = CommandOptionKeyVariableSet (anImageOptionSet, anImageModeOptionSet);
-      myImageModeOptionVariableSet = CommandOptionKeyVariableSet (anImageModeOptionSet);
-
-      ViewerTest_CommandOptionKeySet aGradientOptionSet;
-      aGradientOptionSet.insert (myGradientOptionKey);
-      ViewerTest_CommandOptionKeySet aGradientModeOptionSet;
-      aGradientModeOptionSet.insert (myGradientModeOptionKey);
-      myGradientOptionVariableSet     = CommandOptionKeyVariableSet (aGradientOptionSet, aGradientModeOptionSet);
-      myGradientModeOptionVariableSet = CommandOptionKeyVariableSet (aGradientModeOptionSet);
-
-      ViewerTest_CommandOptionKeySet aColorOptionSet;
-      aColorOptionSet.insert (myColorOptionKey);
-      myColorOptionVariableSet = CommandOptionKeyVariableSet (aColorOptionSet);
-
-      aGradientOptionSet.insert (myDefaultOptionKey);
-      myDefaultGradientOptionVariableSet = CommandOptionKeyVariableSet (aGradientOptionSet, aGradientModeOptionSet);
-      aColorOptionSet.insert (myDefaultOptionKey);
-      myDefaultColorOptionVariableSet = CommandOptionKeyVariableSet (aColorOptionSet);
-
-      ViewerTest_CommandOptionKeySet aHelpOptionSet;
-      aHelpOptionSet.insert (ViewerTest_CmdParser::THE_HELP_COMMAND_OPTION_KEY);
-      myHelpOptionVariableSet = CommandOptionKeyVariableSet (aHelpOptionSet);
-    }
-
-    //! Prepares the command parser. Adds options and creates option sets used to determine
-    //! if a passed option set is valid or not
-    void prepareCommandParser()
-    {
-      addOptionsToCommandParser();
-      createOptionSets();
-    }
-
-    //! Adds a command description to the command parser
-    //! @param theBackgroundCommand the key of the command which description is added to the command parser
-    void addCommandDescription (const BackgroundCommand theBackgroundCommand)
-    {
-      std::string aDescription;
-      bool        isMainCommand = false;
-      switch (theBackgroundCommand)
-      {
-        case BackgroundCommand_Main:
-          aDescription  = "Command: vbackground (changes background or some background settings)";
-          isMainCommand = true;
-          break;
-        case BackgroundCommand_Image:
-          aDescription = "Command: vsetbg (loads image as a background)";
-          break;
-        case BackgroundCommand_ImageMode:
-          aDescription = "Command: vsetbgmode (changes background fill type)";
-          break;
-        case BackgroundCommand_Gradient:
-          aDescription = "Command: vsetgradientbg (mounts gradient background)";
-          break;
-        case BackgroundCommand_GradientMode:
-          aDescription = "Command: vsetgradientbgmode (changes gradient background fill method)";
-          break;
-        case BackgroundCommand_Color:
-          aDescription = "Command: vsetcolorbg (sets color background)";
-          break;
-        case BackgroundCommand_Default:
-          aDescription = "Command: vsetdefaultbg (sets default viewer background gradient or fill color)";
-          break;
-        default:
-          return;
-      }
-      if (!isMainCommand)
-      {
-        aDescription += "\nThis command is obsolete. Use vbackground instead.";
-      }
-      myCommandParser.SetDescription (aDescription);
-    }
-
-    //! Check if a viewer is needed to be initialized
-    //! @param theBackgroundCommand the key of the command that changes the background
-    //! @return true if processing was successful, or false otherwise
-    bool checkViewerIsNeeded (const BackgroundCommand theBackgroundCommand) const
-    {
-      const bool                           isMain             = (theBackgroundCommand == BackgroundCommand_Main);
-      const ViewerTest_CommandOptionKeySet aUsedOptions       = myCommandParser.GetUsedOptions();
-      const bool                           aViewerIsNotNeeded =
-        (theBackgroundCommand == BackgroundCommand_Default)
-        || (myDefaultGradientOptionVariableSet.IsInSet (aUsedOptions) && isMain)
-        || (myDefaultColorOptionVariableSet.IsInSet (aUsedOptions) && isMain)
-        || myHelpOptionVariableSet.IsInSet (aUsedOptions);
-      return !aViewerIsNotNeeded;
-    }
-
-    //! Check if a viewer is initialized
-    //! @param theBackgroundCommandName the name of the command that changes the background
-    //! @param theDrawInterpretor the interpreter of the Draw Harness application
-    //! @return true if a viewer is initialized, or false otherwise
-    static bool checkViewerIsInitialized (const char* const theBackgroundCommandName,
-                                          Draw_Interpretor& theDrawInterpretor)
-    {
-      const Handle (AIS_InteractiveContext)& anAISContext = ViewerTest::GetAISContext();
-      if (anAISContext.IsNull())
-      {
-        theDrawInterpretor << "Use 'vinit' command before executing '" << theBackgroundCommandName << "' command.\n";
-        return false;
-      }
-      return true;
-    }
-
-    //! Processes command options
-    //! @param theBackgroundCommandName the name of the command that changes the background
-    //! @param theBackgroundCommand the key of the command that changes the background
-    //! @param theDrawInterpretor the interpreter of the Draw Harness application
-    //! @return true if processing was successful, or false otherwise
-    bool processCommandOptions (const char* const       theBackgroundCommandName,
-                                const BackgroundCommand theBackgroundCommand,
-                                Draw_Interpretor&       theDrawInterpretor) const
-    {
-      if (myCommandParser.HasNoOption())
-      {
-        return printHelp (theBackgroundCommandName, theDrawInterpretor);
-      }
-      if (checkViewerIsNeeded (theBackgroundCommand)
-          && !checkViewerIsInitialized (theBackgroundCommandName, theDrawInterpretor))
-      {
-        return false;
-      }
-      if (myCommandParser.HasOnlyUnnamedOption())
-      {
-        return processUnnamedOption (theBackgroundCommand);
-      }
-      return processNamedOptions (theBackgroundCommandName, theBackgroundCommand, theDrawInterpretor);
-    }
-
-    //! Processes the unnamed option
-    //! @param theBackgroundCommand the key of the command that changes the background
-    //! @return true if processing was successful, or false otherwise
-    bool processUnnamedOption (const BackgroundCommand theBackgroundCommand) const
-    {
-      switch (theBackgroundCommand)
-      {
-        case BackgroundCommand_Main:
-          return false;
-        case BackgroundCommand_Image:
-          return processImageUnnamedOption();
-        case BackgroundCommand_ImageMode:
-          return processImageModeUnnamedOption();
-        case BackgroundCommand_Gradient:
-          return processGradientUnnamedOption();
-        case BackgroundCommand_GradientMode:
-          return processGradientModeUnnamedOption();
-        case BackgroundCommand_Color:
-          return processColorUnnamedOption();
-        case BackgroundCommand_Default:
-          return processDefaultUnnamedOption();
-        default:
-          return false;
-      }
-    }
-
-    //! Processes the image unnamed option
-    //! @return true if processing was successful, or false otherwise
-    bool processImageUnnamedOption() const
-    {
-      const std::size_t aNumberOfImageUnnamedOptionArguments = myCommandParser.GetNumberOfOptionArguments (
-        ViewerTest_CmdParser::THE_UNNAMED_COMMAND_OPTION_KEY);
-      if ((aNumberOfImageUnnamedOptionArguments != 1) && (aNumberOfImageUnnamedOptionArguments != 2))
-      {
-        return false;
-      }
-      std::string anImageFileName;
-      if (!myCommandParser.Arg (ViewerTest_CmdParser::THE_UNNAMED_COMMAND_OPTION_KEY, 0, anImageFileName))
-      {
-        return false;
-      }
-      Aspect_FillMethod anImageMode = Aspect_FM_CENTERED;
-      if (aNumberOfImageUnnamedOptionArguments == 2)
-      {
-        std::string anImageModeString;
-        if (!myCommandParser.Arg (ViewerTest_CmdParser::THE_UNNAMED_COMMAND_OPTION_KEY, 1, anImageModeString))
-        {
-          return false;
-        }
-        if (!getBackgroundImageFillMethodByName (anImageModeString.c_str(), anImageMode))
-        {
-          return false;
-        }
-      }
-      setImage (anImageFileName.c_str(), anImageMode);
-      return true;
-    }
-
-    //! Processes the image mode unnamed option
-    //! @return true if processing was successful, or false otherwise
-    bool processImageModeUnnamedOption() const
-    {
-      return processImageModeOptionSet (ViewerTest_CmdParser::THE_UNNAMED_COMMAND_OPTION_KEY);
-    }
-
-    //! Processes the gradient unnamed option
-    //! @param theSetGradient the function used to set a background gradient filling
-    //! @return true if processing was successful, or false otherwise
-    bool processGradientUnnamedOption (SetGradientFunction* const theSetGradient = setGradient) const
-    {
-      const Standard_Integer aNumberOfGradientUnnamedOptionArguments = myCommandParser.GetNumberOfOptionArguments (
-        ViewerTest_CmdParser::THE_UNNAMED_COMMAND_OPTION_KEY);
-      if (aNumberOfGradientUnnamedOptionArguments < 2)
-      {
-        return false;
-      }
-
-      Standard_Integer anArgumentIndex = 0;
-      Quantity_Color   aColor1;
-      if (!myCommandParser.ArgColor (ViewerTest_CmdParser::THE_UNNAMED_COMMAND_OPTION_KEY, anArgumentIndex, aColor1))
-      {
-        return false;
-      }
-      if (anArgumentIndex >= aNumberOfGradientUnnamedOptionArguments)
-      {
-        return false;
-      }
-
-      Quantity_Color aColor2;
-      if (!myCommandParser.ArgColor (ViewerTest_CmdParser::THE_UNNAMED_COMMAND_OPTION_KEY, anArgumentIndex, aColor2))
-      {
-        return false;
-      }
-      if (anArgumentIndex > aNumberOfGradientUnnamedOptionArguments)
-      {
-        return false;
-      }
-
-      Aspect_GradientFillMethod aGradientMode = Aspect_GFM_HOR;
-      if (anArgumentIndex == aNumberOfGradientUnnamedOptionArguments - 1)
-      {
-        std::string anGradientModeString;
-
-        if (!myCommandParser.Arg (ViewerTest_CmdParser::THE_UNNAMED_COMMAND_OPTION_KEY,
-                                  anArgumentIndex,
-                                  anGradientModeString))
-        {
-          return false;
-        }
-        if (!getBackgroundGradientFillMethodByName (anGradientModeString.c_str(), aGradientMode))
-        {
-          return false;
-        }
-        ++anArgumentIndex;
-      }
-      if (anArgumentIndex != aNumberOfGradientUnnamedOptionArguments)
-      {
-        return false;
-      }
-      theSetGradient (aColor1, aColor2, aGradientMode);
-      return true;
-    }
-
-    //! Processes the gradient mode unnamed option
-    //! @return true if processing was successful, or false otherwise
-    bool processGradientModeUnnamedOption() const
-    {
-      return processGradientModeOptionSet (ViewerTest_CmdParser::THE_UNNAMED_COMMAND_OPTION_KEY);
-    }
-
-    //! Processes the color unnamed option
-    //! @param theSetColor the function used to set a background color
-    //! @return true if processing was successful, or false otherwise
-    bool processColorUnnamedOption (SetColorFunction* const theSetColor = setColor) const
-    {
-      return processColorOptionSet (ViewerTest_CmdParser::THE_UNNAMED_COMMAND_OPTION_KEY, theSetColor);
-    }
-
-    //! Processes the default back unnamed option
-    //! @return true if processing was successful, or false otherwise
-    bool processDefaultUnnamedOption() const
-    {
-      if (processGradientUnnamedOption (setDefaultGradient))
-      {
-        return true;
-      }
-      return processColorUnnamedOption (setDefaultColor);
-    }
-
-    //! Processes named options
-    //! @param theBackgroundCommandName the name of the command that changes the background
-    //! @param theBackgroundCommand the key of the command that changes the background
-    //! @param theDrawInterpretor the interpreter of the Draw Harness application
-    //! @return true if processing was successful, or false otherwise
-    bool processNamedOptions (const char* const       theBackgroundCommandName,
-                              const BackgroundCommand theBackgroundCommand,
-                              Draw_Interpretor&       theDrawInterpretor) const
-    {
-      const bool                           isMain       = (theBackgroundCommand == BackgroundCommand_Main);
-      const ViewerTest_CommandOptionKeySet aUsedOptions = myCommandParser.GetUsedOptions();
-      if (myCubeMapOptionVariableSet.IsInSet (aUsedOptions) && isMain)
-      {
-        return processCubeMapOptionSet();
-      }
-      if (myImageOptionVariableSet.IsInSet (aUsedOptions)
-          && (isMain || (theBackgroundCommand == BackgroundCommand_Image)))
-      {
-        return processImageOptionSet();
-      }
-      if (myImageModeOptionVariableSet.IsInSet (aUsedOptions)
-          && (isMain || (theBackgroundCommand == BackgroundCommand_ImageMode)))
-      {
-        return processImageModeOptionSet();
-      }
-      if (myGradientOptionVariableSet.IsInSet (aUsedOptions)
-          && (isMain || (theBackgroundCommand == BackgroundCommand_Gradient)))
-      {
-        return processGradientOptionSet();
-      }
-      if (myGradientModeOptionVariableSet.IsInSet (aUsedOptions)
-          && (isMain || (theBackgroundCommand == BackgroundCommand_GradientMode)))
-      {
-        return processGradientModeOptionSet();
-      }
-      if (myColorOptionVariableSet.IsInSet (aUsedOptions)
-          && (isMain || (theBackgroundCommand == BackgroundCommand_Color)))
-      {
-        return processColorOptionSet();
-      }
-      if ((myDefaultGradientOptionVariableSet.IsInSet (aUsedOptions) && isMain)
-          || (myGradientOptionVariableSet.IsInSet (aUsedOptions)
-              && (theBackgroundCommand == BackgroundCommand_Default)))
-      {
-        return processDefaultGradientOptionSet();
-      }
-      if ((myDefaultColorOptionVariableSet.IsInSet (aUsedOptions) && isMain)
-          || (myColorOptionVariableSet.IsInSet (aUsedOptions) && (theBackgroundCommand == BackgroundCommand_Default)))
-      {
-        return processDefaultColorOptionSet();
-      }
-      if (myHelpOptionVariableSet.IsInSet (aUsedOptions))
-      {
-        return processHelpOptionSet (theBackgroundCommandName, theDrawInterpretor);
-      }
-      return false;
-    }
-
-    //! Process the cubemap option set in named and unnamed case.
-    //! @return true if processing was successful, or false otherwise
-    bool processCubeMapOptionSet() const
-    {
-      NCollection_Array1<TCollection_AsciiString> aFilePaths;
-
-      if (!processCubeMapOptions (aFilePaths))
-      {
-        return false;
-      }
-
-      Graphic3d_CubeMapOrder anOrder = Graphic3d_CubeMapOrder::Default();
-
-      if (myCommandParser.HasOption (myCubeMapOrderOptionKey))
-      {
-        if (!processCubeMapOrderOptions (anOrder))
-        {
-          return false;
-        }
-      }
-
-      bool aZIsInverted = false;
-      if (myCommandParser.HasOption (myCubeMapInvertedZOptionKey))
-      {
-        if (!processCubeMapInvertedZOptionSet())
-        {
-          return false;
-        }
-        aZIsInverted = true;
-      }
-
-      bool aToGenPBREnv = true;
-      if (myCommandParser.HasOption (myCubeMapDoNotGenPBREnvOptionKey))
-      {
-        if (!processCubeMapDoNotGenPBREnvOptionSet())
-        {
-          return false;
-        }
-        aToGenPBREnv = false;
-      }
-
-      setCubeMap (aFilePaths, anOrder.Validated(), aZIsInverted, aToGenPBREnv);
-      return true;
-    }
-
-    //! Processes the image option set
-    //! @return true if processing was successful, or false otherwise
-    bool processImageOptionSet() const
-    {
-      std::string anImageFileName;
-      if (!processImageOption (anImageFileName))
-      {
-        return false;
-      }
-      Aspect_FillMethod anImageMode = Aspect_FM_CENTERED;
-      if (myCommandParser.HasOption (myImageModeOptionKey) && !processImageModeOption (anImageMode))
-      {
-        return false;
-      }
-      setImage (anImageFileName.c_str(), anImageMode);
-      return true;
-    }
-
-    //! Processes the image mode option set
-    //! @return true if processing was successful, or false otherwise
-    bool processImageModeOptionSet() const
-    {
-      return processImageModeOptionSet (myImageModeOptionKey);
-    }
-
-    //! Processes the image mode option set
-    //! @param theImageModeOptionKey the key of the option that is interpreted as an image mode option
-    //! @return true if processing was successful, or false otherwise
-    bool processImageModeOptionSet (const ViewerTest_CommandOptionKey theImageModeOptionKey) const
-    {
-      Aspect_FillMethod anImageMode = Aspect_FM_NONE;
-      if (!processImageModeOption (theImageModeOptionKey, anImageMode))
-      {
-        return false;
-      }
-      setImageMode (anImageMode);
-      return true;
-    }
-
-    //! Processes the gradient option set
-    //! @param theSetGradient the function used to set a background gradient filling
-    //! @return true if processing was successful, or false otherwise
-    bool processGradientOptionSet (SetGradientFunction* const theSetGradient = setGradient) const
-    {
-      Quantity_Color aColor1;
-      Quantity_Color aColor2;
-      if (!processGradientOption (aColor1, aColor2))
-      {
-        return false;
-      }
-      Aspect_GradientFillMethod aGradientMode = Aspect_GFM_HOR;
-      if (myCommandParser.HasOption (myGradientModeOptionKey) && !processGradientModeOption (aGradientMode))
-      {
-        return false;
-      }
-      theSetGradient (aColor1, aColor2, aGradientMode);
-      return true;
-    }
-
-    //! Processes the gradient mode option set
-    //! @return true if processing was successful, or false otherwise
-    bool processGradientModeOptionSet() const
-    {
-      return processGradientModeOptionSet (myGradientModeOptionKey);
-    }
-
-    //! Processes the gradient mode option set
-    //! @param theGradientModeOptionKey the key of the option that is interpreted as a gradient mode option
-    //! @return true if processing was successful, or false otherwise
-    bool processGradientModeOptionSet (const ViewerTest_CommandOptionKey theGradientModeOptionKey) const
-    {
-      Aspect_GradientFillMethod aGradientMode = Aspect_GFM_NONE;
-      if (!processGradientModeOption (theGradientModeOptionKey, aGradientMode))
-      {
-        return false;
-      }
-      setGradientMode (aGradientMode);
-      return true;
-    }
-
-    //! Processes the color option set
-    //! @param theSetColor the function used to set a background color
-    //! @return true if processing was successful, or false otherwise
-    bool processColorOptionSet (SetColorFunction* const theSetColor = setColor) const
-    {
-      return processColorOptionSet (myColorOptionKey, theSetColor);
-    }
-
-    //! Processes the default color option set
-    //! @return true if processing was successful, or false otherwise
-    bool processDefaultGradientOptionSet() const
-    {
-      return processGradientOptionSet (setDefaultGradient);
-    }
-
-    //! Processes the default gradient option set
-    //! @return true if processing was successful, or false otherwise
-    bool processDefaultColorOptionSet() const
-    {
-      return processColorOptionSet (setDefaultColor);
-    }
-
-    //! Processes the color option set
-    //! @param theColorOptionKey the key of the option that is interpreted as a color option
-    //! @param theSetColor the function used to set a background color
-    //! @return true if processing was successful, or false otherwise
-    bool processColorOptionSet (const ViewerTest_CommandOptionKey theColorOptionKey,
-                                SetColorFunction* const           theSetColor = setColor) const
-    {
-      Quantity_Color aColor;
-      if (!processColorOption (theColorOptionKey, aColor))
-      {
-        return false;
-      }
-      theSetColor (aColor);
-      return true;
-    }
-
-    //! Processes the help option set
-    //! @param theBackgroundCommandName the name of the command that changes the background
-    //! @param theDrawInterpretor the interpreter of the Draw Harness application
-    //! @return true if processing was successful, or false otherwise
-    bool processHelpOptionSet (const char* const theBackgroundCommandName, Draw_Interpretor& theDrawInterpretor) const
-    {
-      const Standard_Integer aNumberOfHelpOptionArguments = myCommandParser.GetNumberOfOptionArguments (
-        ViewerTest_CmdParser::THE_HELP_COMMAND_OPTION_KEY);
-      if (aNumberOfHelpOptionArguments != 0)
-      {
-        return false;
-      }
-      return printHelp (theBackgroundCommandName, theDrawInterpretor);
-    }
-
-    //! Processes the cubemap option
-    //! @param theFilePaths the array of filenames of cubemap sides
-    //! @return true if processing was successful, or false otherwise
-    bool processCubeMapOptions (NCollection_Array1<TCollection_AsciiString> &theFilePaths) const
-    {
-      const Standard_Integer aNumberOfCubeMapOptionArguments = myCommandParser.GetNumberOfOptionArguments (myCubeMapOptionKey);
-
-      if (aNumberOfCubeMapOptionArguments != 1
-       && aNumberOfCubeMapOptionArguments != 6)
-      {
-        return false;
-      }
-
-      theFilePaths.Resize(0, aNumberOfCubeMapOptionArguments - 1, Standard_False);
-
-      for (int i = 0; i < aNumberOfCubeMapOptionArguments; ++i)
-      {
-        std::string aCubeMapFileName;
-        if (!myCommandParser.Arg (myCubeMapOptionKey, i, aCubeMapFileName))
-        {
-          return false;
-        }
-        theFilePaths[i] = aCubeMapFileName.c_str();
-      }
-
-      return true;
-    }
-
-    //! Processes the inverted z cubemap option
-    //! @return true if processing was successful, or false otherwise
-    bool processCubeMapInvertedZOptionSet () const
-    {
-      const Standard_Integer aNumberOfCubeMapZInversionOptionArguments =
-        myCommandParser.GetNumberOfOptionArguments (myCubeMapInvertedZOptionKey);
-
-      if (aNumberOfCubeMapZInversionOptionArguments != 0)
-      {
-        return false;
-      }
-
-      return true;
-    }
-
-    //! Processes the option allowing to skip IBM maps generation
-    //! @return true if processing was successful, or false otherwise
-    bool processCubeMapDoNotGenPBREnvOptionSet() const
-    {
-      const Standard_Integer aNumberOfCubeMapDoNotGenPBREnvOptionArguments =
-        myCommandParser.GetNumberOfOptionArguments(myCubeMapDoNotGenPBREnvOptionKey);
-
-      if (aNumberOfCubeMapDoNotGenPBREnvOptionArguments != 0)
-      {
-        return false;
-      }
-
-      return true;
-    }
-
-    //! Processes the tiles order option
-    //! @param theOrder the array of indexes if cubemap sides in tile grid
-    //! @return true if processing was successful, or false otherwise
-    bool processCubeMapOrderOptions (Graphic3d_CubeMapOrder& theOrder) const
-    {
-      const Standard_Integer aNumberOfCubeMapOrderOptionArguments = myCommandParser.GetNumberOfOptionArguments(
-        myCubeMapOrderOptionKey);
-
-      if (aNumberOfCubeMapOrderOptionArguments != 6)
-      {
-        return false;
-      }
-
-
-      for (unsigned int i = 0; i < 6; ++i)
-      {
-        std::string anOrderItem;
-        if (!myCommandParser.Arg (myCubeMapOrderOptionKey, i, anOrderItem)) 
-        {
-          return false;
-        }
-
-        theOrder.Set (Graphic3d_CubeMapSide (i),
-                      static_cast<unsigned char> (Draw::Atoi (anOrderItem.c_str())));
-      }
-
-      return theOrder.IsValid();
-    }
-
-    //! Processes the image option
-    //! @param theImageFileName the filename of the image to be used as a background
-    //! @return true if processing was successful, or false otherwise
-    bool processImageOption (std::string& theImageFileName) const
-    {
-      const Standard_Integer aNumberOfImageOptionArguments = myCommandParser.GetNumberOfOptionArguments (
-        myImageOptionKey);
-      if (aNumberOfImageOptionArguments != 1)
-      {
-        return false;
-      }
-      std::string anImageFileName;
-      if (!myCommandParser.Arg (myImageOptionKey, 0, anImageFileName))
-      {
-        return false;
-      }
-      theImageFileName = anImageFileName;
-      return true;
-    }
-
-    //! Processes the image mode option
-    //! @param theImageMode the fill type used for a background image
-    //! @return true if processing was successful, or false otherwise
-    bool processImageModeOption (Aspect_FillMethod& theImageMode) const
-    {
-      return processImageModeOption (myImageModeOptionKey, theImageMode);
-    }
-
-    //! Processes the image mode option
-    //! @param theImageModeOptionKey the key of the option that is interpreted as an image mode option
-    //! @param theImageMode the fill type used for a background image
-    //! @return true if processing was successful, or false otherwise
-    bool processImageModeOption (const ViewerTest_CommandOptionKey theImageModeOptionKey,
-                                 Aspect_FillMethod&                theImageMode) const
-    {
-      return processModeOption (theImageModeOptionKey, getBackgroundImageFillMethodByName, theImageMode);
-    }
-
-    //! Processes the gradient option
-    //! @param theColor1 the gradient starting color
-    //! @param theColor2 the gradient ending color
-    //! @return true if processing was successful, or false otherwise
-    bool processGradientOption (Quantity_Color& theColor1, Quantity_Color& theColor2) const
-    {
-      Standard_Integer anArgumentIndex = 0;
-      Quantity_Color   aColor1;
-      if (!myCommandParser.ArgColor (myGradientOptionKey, anArgumentIndex, aColor1))
-      {
-        return false;
-      }
-      Quantity_Color aColor2;
-      if (!myCommandParser.ArgColor (myGradientOptionKey, anArgumentIndex, aColor2))
-      {
-        return false;
-      }
-      const Standard_Integer aNumberOfGradientOptionArguments = myCommandParser.GetNumberOfOptionArguments (
-        myGradientOptionKey);
-      if (anArgumentIndex != aNumberOfGradientOptionArguments)
-      {
-        return false;
-      }
-      theColor1 = aColor1;
-      theColor2 = aColor2;
-      return true;
-    }
-
-    //! Processes the gradient mode option
-    //! @param theGradientMode the fill method used for a background gradient filling
-    //! @return true if processing was successful, or false otherwise
-    bool processGradientModeOption (Aspect_GradientFillMethod& theGradientMode) const
-    {
-      return processGradientModeOption (myGradientModeOptionKey, theGradientMode);
-    }
-
-    //! Processes the gradient mode option
-    //! @param theGradientModeOptionKey the key of the option that is interpreted as a gradient mode option
-    //! @param theGradientMode the fill method used for a background gradient filling
-    //! @return true if processing was successful, or false otherwise
-    bool processGradientModeOption (const ViewerTest_CommandOptionKey theGradientModeOptionKey,
-                                    Aspect_GradientFillMethod&        theGradientMode) const
-    {
-      return processModeOption (theGradientModeOptionKey, getBackgroundGradientFillMethodByName, theGradientMode);
-    }
-
-    //! Processes some mode option
-    //! @tparam TheMode the type of a mode to be processed
-    //! @param theModeOptionKey the key of the option that is interpreted as a mode option
-    //! @param theMode a mode to be processed
-    //! @return true if processing was successful, or false otherwise
-    template <typename TheMode>
-    bool processModeOption (const ViewerTest_CommandOptionKey theModeOptionKey,
-                            bool (*const theGetModeByName) (const TCollection_AsciiString& /* theModeName */,
-                                                            TheMode& /* theMode */),
-                            TheMode& theMode) const
-    {
-      const Standard_Integer aNumberOfModeOptionArguments = myCommandParser.GetNumberOfOptionArguments (
-        theModeOptionKey);
-      if (aNumberOfModeOptionArguments != 1)
-      {
-        return false;
-      }
-      std::string aModeString;
-      if (!myCommandParser.Arg (theModeOptionKey, 0, aModeString))
-      {
-        return false;
-      }
-      TheMode aMode = TheMode();
-      if (!theGetModeByName (aModeString.c_str(), aMode))
-      {
-        return false;
-      }
-      theMode = aMode;
-      return true;
-    }
-
-    //! Processes the color option
-    //! @param theColor a color used for filling a background
-    //! @return true if processing was successful, or false otherwise
-    bool processColorOption (Quantity_Color& theColor) const
-    {
-      return processColorOption (myColorOptionKey, theColor);
-    }
-
-    //! Processes the color option
-    //! @param theColorOptionKey the key of the option that is interpreted as a color option
-    //! @param theColor a color used for filling a background
-    //! @return true if processing was successful, or false otherwise
-    bool processColorOption (const ViewerTest_CommandOptionKey theColorOptionKey, Quantity_Color& theColor) const
-    {
-      Standard_Integer anArgumentIndex = 0;
-      Quantity_Color   aColor;
-      if (!myCommandParser.ArgColor (theColorOptionKey, anArgumentIndex, aColor))
-      {
-        return false;
-      }
-      const Standard_Integer aNumberOfColorOptionArguments = myCommandParser.GetNumberOfOptionArguments (
-        theColorOptionKey);
-      if (anArgumentIndex != aNumberOfColorOptionArguments)
-      {
-        return false;
-      }
-      theColor = aColor;
-      return true;
-    }
-
-    //! Prints helping message
-    //! @param theBackgroundCommandName the name of the command that changes the background
-    //! @param theDrawInterpretor the interpreter of the Draw Harness application
-    //! @return true if printing was successful, or false otherwise
-    static bool printHelp (const char* const theBackgroundCommandName, Draw_Interpretor& theDrawInterpretor)
-    {
-      return theDrawInterpretor.PrintHelp (theBackgroundCommandName) == TCL_OK;
-    }
-
-    //! Sets the cubemap as a background
-    //! @param theFileNames the array of filenames of packed or multifile cubemap
-    //! @param theOrder array of cubemap sides indexes mapping them from tiles in packed cubemap
-    static void setCubeMap (const NCollection_Array1<TCollection_AsciiString>& theFileNames,
-                            const Graphic3d_ValidatedCubeMapOrder              theOrder = Graphic3d_CubeMapOrder::Default(),
-                            bool                                               theZIsInverted = false,
-                            bool                                               theToGenPBREnv = true)
-    {
-      const Handle(V3d_View)& aCurrentView = ViewerTest::CurrentView();
-      Handle(Graphic3d_CubeMap) aCubeMap;
-
-      if (theFileNames.Size() == 1)
-        aCubeMap = new Graphic3d_CubeMapPacked(theFileNames[0], theOrder);
-      else
-        aCubeMap = new Graphic3d_CubeMapSeparate(theFileNames);
-
-      aCubeMap->SetZInversion (theZIsInverted);
-
-      aCubeMap->GetParams()->SetFilter(Graphic3d_TOTF_BILINEAR);
-      aCubeMap->GetParams()->SetRepeat(Standard_False);
-      aCubeMap->GetParams()->SetTextureUnit(Graphic3d_TextureUnit_EnvMap);
-
-      aCurrentView->SetBackgroundCubeMap (aCubeMap, theToGenPBREnv, Standard_True);
-    }
-
-    //! Sets the image as a background
-    //! @param theImageFileName the filename of the image to be used as a background
-    //! @param theImageMode the fill type used for a background image
-    static void setImage (const Standard_CString theImageFileName, const Aspect_FillMethod theImageMode)
-    {
-      const Handle (V3d_View)& aCurrentView = ViewerTest::CurrentView();
-      aCurrentView->SetBackgroundImage (theImageFileName, theImageMode, Standard_True);
-    }
-
-    //! Sets the fill type used for a background image
-    //! @param theImageMode the fill type used for a background image
-    static void setImageMode (const Aspect_FillMethod theImageMode)
-    {
-      const Handle (V3d_View)& aCurrentView = ViewerTest::CurrentView();
-      aCurrentView->SetBgImageStyle (theImageMode, Standard_True);
-    }
-
-    //! Sets the gradient filling for a background
-    //! @param theColor1 the gradient starting color
-    //! @param theColor2 the gradient ending color
-    //! @param theGradientMode the fill method used for a background gradient filling
-    static void setGradient (const Quantity_Color&           theColor1,
-                             const Quantity_Color&           theColor2,
-                             const Aspect_GradientFillMethod theGradientMode)
-    {
-      const Handle (V3d_View)& aCurrentView = ViewerTest::CurrentView();
-      aCurrentView->SetBgGradientColors (theColor1, theColor2, theGradientMode, Standard_True);
-    }
-
-    //! Sets the fill method used for a background gradient filling
-    //! @param theGradientMode the fill method used for a background gradient filling
-    static void setGradientMode (const Aspect_GradientFillMethod theGradientMode)
-    {
-      const Handle (V3d_View)& aCurrentView = ViewerTest::CurrentView();
-      aCurrentView->SetBgGradientStyle (theGradientMode, Standard_True);
-    }
-
-    //! Sets the color used for filling a background
-    //! @param theColor the color used for filling a background
-    static void setColor (const Quantity_Color& theColor)
-    {
-      const Handle (V3d_View)& aCurrentView = ViewerTest::CurrentView();
-      aCurrentView->SetBgGradientStyle (Aspect_GFM_NONE);
-      aCurrentView->SetBackgroundColor (theColor);
-      aCurrentView->Update();
-    }
-
-    //! Sets the gradient filling for a background in a default viewer
-    //! @param theColor1 the gradient starting color
-    //! @param theColor2 the gradient ending color
-    //! @param theGradientMode the fill method used for a background gradient filling
-    static void setDefaultGradient (const Quantity_Color&           theColor1,
-                                    const Quantity_Color&           theColor2,
-                                    const Aspect_GradientFillMethod theGradientMode)
-    {
-      ViewerTest_DefaultBackground.GradientColor1 = theColor1;
-      ViewerTest_DefaultBackground.GradientColor2 = theColor2;
-      ViewerTest_DefaultBackground.FillMethod     = theGradientMode;
-      setDefaultGradient();
-    }
-
-    //! Sets the color used for filling a background in a default viewer
-    //! @param theColor the color used for filling a background
-    static void setDefaultColor (const Quantity_Color& theColor)
-    {
-      ViewerTest_DefaultBackground.GradientColor1 = Quantity_Color();
-      ViewerTest_DefaultBackground.GradientColor2 = Quantity_Color();
-      ViewerTest_DefaultBackground.FillMethod     = Aspect_GFM_NONE;
-      ViewerTest_DefaultBackground.FlatColor      = theColor;
-      setDefaultGradient();
-      setDefaultColor();
-    }
-
-    //! Sets the gradient filling for a background in a default viewer.
-    //! Gradient settings are taken from ViewerTest_DefaultBackground structure
-    static void setDefaultGradient()
-    {
-      for (NCollection_DoubleMap<TCollection_AsciiString, Handle (AIS_InteractiveContext)>::Iterator
-             anInteractiveContextIterator (ViewerTest_myContexts);
-           anInteractiveContextIterator.More();
-           anInteractiveContextIterator.Next())
-      {
-        const Handle (V3d_Viewer)& aViewer = anInteractiveContextIterator.Value()->CurrentViewer();
-        aViewer->SetDefaultBgGradientColors (ViewerTest_DefaultBackground.GradientColor1,
-                                             ViewerTest_DefaultBackground.GradientColor2,
-                                             ViewerTest_DefaultBackground.FillMethod);
-      }
-    }
-
-    //! Sets the color used for filling a background in a default viewer.
-    //! The color value is taken from ViewerTest_DefaultBackground structure
-    static void setDefaultColor()
-    {
-      for (NCollection_DoubleMap<TCollection_AsciiString, Handle (AIS_InteractiveContext)>::Iterator
-             anInteractiveContextIterator (ViewerTest_myContexts);
-           anInteractiveContextIterator.More();
-           anInteractiveContextIterator.Next())
-      {
-        const Handle (V3d_Viewer)& aViewer = anInteractiveContextIterator.Value()->CurrentViewer();
-        aViewer->SetDefaultBackgroundColor (ViewerTest_DefaultBackground.FlatColor);
-      }
-    }
-  };
-
-} // namespace
-
 //==============================================================================
 
 #ifdef _WIN32
@@ -1672,28 +477,23 @@ TCollection_AsciiString ViewerTest::GetCurrentViewName ()
 //purpose  : Create the window viewer and initialize all the global variable
 //==============================================================================
 
-TCollection_AsciiString ViewerTest::ViewerInit (const Standard_Integer thePxLeft,
-                                                const Standard_Integer thePxTop,
-                                                const Standard_Integer thePxWidth,
-                                                const Standard_Integer thePxHeight,
-                                                const TCollection_AsciiString& theViewName,
-                                                const TCollection_AsciiString& theDisplayName,
-                                                const Handle(V3d_View)& theViewToClone,
-                                                const Standard_Boolean theIsVirtual)
+TCollection_AsciiString ViewerTest::ViewerInit (const ViewerTest_VinitParams& theParams)
 {
   // Default position and dimension of the viewer window.
   // Note that left top corner is set to be sufficiently small to have
   // window fit in the small screens (actual for remote desktops, see #23003).
   // The position corresponds to the window's client area, thus some
   // gap is added for window frame to be visible.
-  Standard_Integer aPxLeft  = 20,  aPxTop    = 40;
-  Standard_Integer aPxWidth = 409, aPxHeight = 409;
+  Graphic3d_Vec2d aPxTopLeft (20, 40);
+  Graphic3d_Vec2d aPxSize (409, 409);
   Standard_Boolean isDefViewSize = Standard_True;
   Standard_Boolean toCreateViewer = Standard_False;
-  const Standard_Boolean isVirtual = Draw_VirtualWindows || theIsVirtual;
-  if (!theViewToClone.IsNull())
+  const Standard_Boolean isVirtual = Draw_VirtualWindows || theParams.IsVirtual;
+  if (!theParams.ViewToClone.IsNull())
   {
-    theViewToClone->Window()->Size (aPxWidth, aPxHeight);
+    Graphic3d_Vec2i aCloneSize;
+    theParams.ViewToClone->Window()->Size (aCloneSize.x(), aCloneSize.y());
+    aPxSize = Graphic3d_Vec2d (aCloneSize);
     isDefViewSize = Standard_False;
   #if !defined(__EMSCRIPTEN__)
     (void )isDefViewSize;
@@ -1717,29 +517,10 @@ TCollection_AsciiString ViewerTest::ViewerInit (const Standard_Integer thePxLeft
   }
 
   Handle(Graphic3d_GraphicDriver) aGraphicDriver;
-  ViewerTest_Names aViewNames(theViewName);
+  ViewerTest_Names aViewNames (theParams.ViewName);
   if (ViewerTest_myViews.IsBound1 (aViewNames.GetViewName()))
   {
     aViewNames.SetViewName (aViewNames.GetViewerName() + "/" + CreateName<Handle(V3d_View)>(ViewerTest_myViews, "View"));
-  }
-
-  if (thePxLeft != 0)
-  {
-    aPxLeft = thePxLeft;
-  }
-  if (thePxTop != 0)
-  {
-    aPxTop = thePxTop;
-  }
-  if (thePxWidth != 0)
-  {
-    isDefViewSize = Standard_False;
-    aPxWidth = thePxWidth;
-  }
-  if (thePxHeight != 0)
-  {
-    isDefViewSize = Standard_False;
-    aPxHeight = thePxHeight;
   }
 
   // Get graphic driver (create it or get from another view)
@@ -1748,9 +529,9 @@ TCollection_AsciiString ViewerTest::ViewerInit (const Standard_Integer thePxLeft
   {
     // Get connection string
   #if defined(HAVE_XLIB)
-    if (!theDisplayName.IsEmpty())
+    if (!theParams.DisplayName.IsEmpty())
     {
-      SetDisplayConnection (new Aspect_DisplayConnection (theDisplayName));
+      SetDisplayConnection (new Aspect_DisplayConnection (theParams.DisplayName));
     }
     else
     {
@@ -1764,7 +545,6 @@ TCollection_AsciiString ViewerTest::ViewerInit (const Standard_Integer thePxLeft
       SetDisplayConnection (new Aspect_DisplayConnection (aDispX));
     }
   #else
-    (void)theDisplayName; // avoid warning on unused argument
     SetDisplayConnection (new Aspect_DisplayConnection ());
   #endif
 
@@ -1783,53 +563,89 @@ TCollection_AsciiString ViewerTest::ViewerInit (const Standard_Integer thePxLeft
     aGraphicDriver = ViewerTest_myDrivers.Find1 (aViewNames.GetDriverName());
   }
 
-  //Dispose the window if input parameters are default
-  if (!ViewerTest_myViews.IsEmpty() && thePxLeft == 0 && thePxTop == 0)
-  {
-    Standard_Integer aTop = 0,
-                     aLeft = 0,
-                     aRight = 0,
-                     aBottom = 0,
-                     aScreenWidth = 0,
-                     aScreenHeight = 0;
-
-    // Get screen resolution
+  // Get screen resolution
+  Graphic3d_Vec2i aScreenSize;
 #if defined(_WIN32)
-    RECT aWindowSize;
-    GetClientRect(GetDesktopWindow(), &aWindowSize);
-    aScreenHeight = aWindowSize.bottom;
-    aScreenWidth = aWindowSize.right;
+  RECT aWindowSize;
+  GetClientRect(GetDesktopWindow(), &aWindowSize);
+  aScreenSize.SetValues (aWindowSize.right, aWindowSize.bottom);
 #elif defined(HAVE_XLIB)
-    ::Display* aDispX = (::Display* )GetDisplayConnection()->GetDisplayAspect();
-    Screen* aScreen = DefaultScreenOfDisplay(aDispX);
-    aScreenWidth  = WidthOfScreen(aScreen);
-    aScreenHeight = HeightOfScreen(aScreen);
+  ::Display* aDispX = (::Display* )GetDisplayConnection()->GetDisplayAspect();
+  Screen* aScreen = DefaultScreenOfDisplay(aDispX);
+  aScreenSize.x() = WidthOfScreen(aScreen);
+  aScreenSize.y() = HeightOfScreen(aScreen);
 #elif defined(__APPLE__)
-    GetCocoaScreenResolution (aScreenWidth, aScreenHeight);
+  GetCocoaScreenResolution (aScreenSize.x(), aScreenSize.y());
 #else
-    // not implemented
+  // not implemented
 #endif
 
-    TCollection_AsciiString anOverlappedViewId("");
+  if (!theParams.ParentView.IsNull())
+  {
+    aPxTopLeft.SetValues (0, 0);
+  }
+  if (theParams.Offset.x() != 0)
+  {
+    aPxTopLeft.x() = theParams.Offset.x();
+  }
+  if (theParams.Offset.y() != 0)
+  {
+    aPxTopLeft.y() = theParams.Offset.y();
+  }
+  if (theParams.Size.x() != 0)
+  {
+    isDefViewSize = Standard_False;
+    aPxSize.x() = theParams.Size.x();
+    if (aPxSize.x() <= 1.0
+     && aScreenSize.x() > 0
+     && theParams.ParentView.IsNull())
+    {
+      aPxSize.x() = aPxSize.x() * double(aScreenSize.x());
+    }
+  }
+  if (theParams.Size.y() != 0)
+  {
+    isDefViewSize = Standard_False;
+    aPxSize.y() = theParams.Size.y();
+    if (aPxSize.y() <= 1.0
+     && aScreenSize.y() > 0
+     && theParams.ParentView.IsNull())
+    {
+      aPxSize.y() = aPxSize.y() * double(aScreenSize.y());
+    }
+  }
 
-    while (IsWindowOverlapped (aPxLeft, aPxTop, aPxLeft + aPxWidth, aPxTop + aPxHeight, anOverlappedViewId))
+  //Dispose the window if input parameters are default
+  if (!ViewerTest_myViews.IsEmpty()
+    && theParams.ParentView.IsNull()
+    && theParams.Offset.x() == 0
+    && theParams.Offset.y() == 0)
+  {
+    Standard_Integer aTop = 0, aLeft = 0, aRight = 0, aBottom = 0;
+    TCollection_AsciiString anOverlappedViewId("");
+    while (IsWindowOverlapped ((int )aPxTopLeft.x(), (int )aPxTopLeft.y(),
+                               (int )aPxTopLeft.x() + (int )aPxSize.x(),
+                               (int )aPxTopLeft.y() + (int )aPxSize.y(), anOverlappedViewId))
     {
       ViewerTest_myViews.Find1(anOverlappedViewId)->Window()->Position (aLeft, aTop, aRight, aBottom);
 
-      if (IsWindowOverlapped (aRight + 20, aPxTop, aRight + 20 + aPxWidth, aPxTop + aPxHeight, anOverlappedViewId)
-        && aRight + 2*aPxWidth + 40 > aScreenWidth)
+      if (IsWindowOverlapped (aRight + 20, (int )aPxTopLeft.y(), aRight + 20 + (int )aPxSize.x(),
+                              (int )aPxTopLeft.y() + (int )aPxSize.y(), anOverlappedViewId)
+        && aRight + 2 * aPxSize.x() + 40 > aScreenSize.x())
       {
-        if (aBottom + aPxHeight + 40 > aScreenHeight)
+        if (aBottom + aPxSize.y() + 40 > aScreenSize.y())
         {
-          aPxLeft = 20;
-          aPxTop = 40;
+          aPxTopLeft.x() = 20;
+          aPxTopLeft.y() = 40;
           break;
         }
-        aPxLeft = 20;
-        aPxTop = aBottom + 40;
+        aPxTopLeft.x() = 20;
+        aPxTopLeft.y() = aBottom + 40;
       }
       else
-        aPxLeft = aRight + 20;
+      {
+        aPxTopLeft.x() = aRight + 20;
+      }
     }
   }
 
@@ -1883,61 +699,76 @@ TCollection_AsciiString ViewerTest::ViewerInit (const Standard_Integer thePxLeft
   }
 
   // Create window
-#if defined(_WIN32)
-  VT_GetWindow() = new WNT_Window (aTitle.ToCString(), WClass(),
-                                   isVirtual ? WS_POPUP : WS_OVERLAPPEDWINDOW,
-                                    aPxLeft, aPxTop,
-                                    aPxWidth, aPxHeight,
-                                    Quantity_NOC_BLACK);
-  VT_GetWindow()->RegisterRawInputDevices (WNT_Window::RawInputMask_SpaceMouse);
-#elif defined(HAVE_XLIB)
-  VT_GetWindow() = new Xw_Window (aGraphicDriver->GetDisplayConnection(),
-                                  aTitle.ToCString(),
-                                  aPxLeft, aPxTop,
-                                  aPxWidth, aPxHeight);
-#elif defined(__APPLE__)
-  VT_GetWindow() = new Cocoa_Window (aTitle.ToCString(),
-                                     aPxLeft, aPxTop,
-                                     aPxWidth, aPxHeight);
-  ViewerTest_SetCocoaEventManagerView (VT_GetWindow());
-#elif defined(__EMSCRIPTEN__)
-  // current EGL implementation in Emscripten supports only one global WebGL canvas returned by Module.canvas property;
-  // the code should be revised for handling multiple canvas elements (which is technically also possible)
-  TCollection_AsciiString aCanvasId = getModuleCanvasId();
-  if (!aCanvasId.IsEmpty())
+  if (!theParams.ParentView.IsNull())
   {
-    aCanvasId = TCollection_AsciiString("#") + aCanvasId;
+    VT_GetWindow() = Handle(ViewerTest_Window)::DownCast (theParams.ParentView->Window());
   }
+  else
+  {
+  #if defined(_WIN32)
+    VT_GetWindow() = new WNT_Window (aTitle.ToCString(), WClass(),
+                                     isVirtual ? WS_POPUP : WS_OVERLAPPEDWINDOW,
+                                     (int )aPxTopLeft.x(), (int )aPxTopLeft.y(),
+                                     (int )aPxSize.x(), (int )aPxSize.y(),
+                                     Quantity_NOC_BLACK);
+    VT_GetWindow()->RegisterRawInputDevices (WNT_Window::RawInputMask_SpaceMouse);
+  #elif defined(HAVE_XLIB)
+    VT_GetWindow() = new Xw_Window (aGraphicDriver->GetDisplayConnection(),
+                                    aTitle.ToCString(),
+                                    (int )aPxTopLeft.x(), (int )aPxTopLeft.y(),
+                                    (int )aPxSize.x(), (int )aPxSize.y());
+  #elif defined(__APPLE__)
+    VT_GetWindow() = new Cocoa_Window (aTitle.ToCString(),
+                                       (int )aPxTopLeft.x(), (int )aPxTopLeft.y(),
+                                       (int )aPxSize.x(), (int )aPxSize.y());
+    ViewerTest_SetCocoaEventManagerView (VT_GetWindow());
+  #elif defined(__EMSCRIPTEN__)
+    // current EGL implementation in Emscripten supports only one global WebGL canvas returned by Module.canvas property;
+    // the code should be revised for handling multiple canvas elements (which is technically also possible)
+    TCollection_AsciiString aCanvasId = getModuleCanvasId();
+    if (!aCanvasId.IsEmpty())
+    {
+      aCanvasId = TCollection_AsciiString("#") + aCanvasId;
+    }
 
-  VT_GetWindow() = new Wasm_Window (aCanvasId);
-  Graphic3d_Vec2i aRealSize;
-  VT_GetWindow()->Size (aRealSize.x(), aRealSize.y());
-  if (!isDefViewSize || (aRealSize.x() <= 0 && aRealSize.y() <= 0))
-  {
-    // Wasm_Window wraps an existing HTML element without creating a new one.
-    // Keep size defined on a web page instead of defaulting to 409x409 (as in case of other platform),
-    // but resize canvas if vinit has been called with explicitly specified dimensions.
-    VT_GetWindow()->SetSizeLogical (Graphic3d_Vec2d (aPxWidth, aPxHeight));
+    VT_GetWindow() = new Wasm_Window (aCanvasId);
+    Graphic3d_Vec2i aRealSize;
+    VT_GetWindow()->Size (aRealSize.x(), aRealSize.y());
+    if (!isDefViewSize || (aRealSize.x() <= 0 && aRealSize.y() <= 0))
+    {
+      // Wasm_Window wraps an existing HTML element without creating a new one.
+      // Keep size defined on a web page instead of defaulting to 409x409 (as in case of other platform),
+      // but resize canvas if vinit has been called with explicitly specified dimensions.
+      VT_GetWindow()->SetSizeLogical (Graphic3d_Vec2d (aPxSize));
+    }
+  #else
+    // not implemented
+    VT_GetWindow() = new Aspect_NeutralWindow();
+    VT_GetWindow()->SetSize ((int )aPxSize.x(), (int )aPxSize.y());
+  #endif
+    VT_GetWindow()->SetVirtual (isVirtual);
   }
-#else
-  // not implemented
-  VT_GetWindow() = new Aspect_NeutralWindow();
-  VT_GetWindow()->SetSize (aPxWidth, aPxHeight);
-#endif
-  VT_GetWindow()->SetVirtual (isVirtual);
 
   // View setup
   Handle(V3d_View) aView;
-  if (!theViewToClone.IsNull())
+  if (!theParams.ViewToClone.IsNull())
   {
-    aView = new ViewerTest_V3dView (a3DViewer, theViewToClone);
+    aView = new ViewerTest_V3dView (a3DViewer, theParams.ViewToClone);
   }
   else
   {
     aView = new ViewerTest_V3dView (a3DViewer, a3DViewer->DefaultTypeOfView());
   }
 
-  aView->SetWindow (VT_GetWindow());
+  aView->View()->SetSubviewComposer (theParams.IsComposer);
+  if (!theParams.ParentView.IsNull())
+  {
+    aView->SetWindow (theParams.ParentView, aPxSize, theParams.Corner, aPxTopLeft, theParams.SubviewMargins);
+  }
+  else
+  {
+    aView->SetWindow (VT_GetWindow());
+  }
   ViewerTest::GetAISContext()->RedrawImmediate (a3DViewer);
 
   ViewerTest::CurrentView(aView);
@@ -2147,12 +978,9 @@ static int VDriver (Draw_Interpretor& theDi, Standard_Integer theArgsNb, const c
 //==============================================================================
 static int VInit (Draw_Interpretor& theDi, Standard_Integer theArgsNb, const char** theArgVec)
 {
-  TCollection_AsciiString aViewName, aDisplayName;
-  Standard_Integer aPxLeft = 0, aPxTop = 0, aPxWidth = 0, aPxHeight = 0;
-  Standard_Boolean isVirtual = false;
-  Handle(V3d_View) aCopyFrom;
+  ViewerTest_VinitParams aParams;
   TCollection_AsciiString aName, aValue;
-  int is2dMode = -1;
+  int is2dMode = -1, aDpiAware = -1;
   for (Standard_Integer anArgIt = 1; anArgIt < theArgsNb; ++anArgIt)
   {
     const TCollection_AsciiString anArg = theArgVec[anArgIt];
@@ -2161,87 +989,128 @@ static int VInit (Draw_Interpretor& theDi, Standard_Integer theArgsNb, const cha
     if (anArgIt + 1 < theArgsNb
      && anArgCase == "-name")
     {
-      aViewName = theArgVec[++anArgIt];
+      aParams.ViewName = theArgVec[++anArgIt];
     }
     else if (anArgIt + 1 < theArgsNb
           && (anArgCase == "-left"
-           || anArgCase == "-l"))
+           || anArgCase == "-l")
+           && Draw::ParseReal (theArgVec[anArgIt + 1], aParams.Offset.x()))
     {
-      aPxLeft = Draw::Atoi (theArgVec[++anArgIt]);
+      ++anArgIt;
     }
     else if (anArgIt + 1 < theArgsNb
           && (anArgCase == "-top"
-           || anArgCase == "-t"))
+           || anArgCase == "-t")
+           && Draw::ParseReal (theArgVec[anArgIt + 1], aParams.Offset.y()))
     {
-      aPxTop = Draw::Atoi (theArgVec[++anArgIt]);
+      ++anArgIt;
     }
     else if (anArgIt + 1 < theArgsNb
           && (anArgCase == "-width"
-           || anArgCase == "-w"))
+           || anArgCase == "-w")
+           && Draw::ParseReal (theArgVec[anArgIt + 1], aParams.Size.x()))
     {
-      aPxWidth = Draw::Atoi (theArgVec[++anArgIt]);
+      ++anArgIt;
     }
     else if (anArgIt + 1 < theArgsNb
           && (anArgCase == "-height"
-           || anArgCase == "-h"))
+           || anArgCase == "-h")
+           && Draw::ParseReal (theArgVec[anArgIt + 1], aParams.Size.y()))
     {
-      aPxHeight = Draw::Atoi (theArgVec[++anArgIt]);
+      ++anArgIt;
+    }
+    else if (anArgIt + 1 < theArgsNb
+          && (anArgCase == "-pos"
+           || anArgCase == "-position"
+           || anArgCase == "-corner")
+          && ViewerTest::ParseCorner (theArgVec[anArgIt + 1], aParams.Corner))
+    {
+      ++anArgIt;
+    }
+    else if (anArgIt + 2 < theArgsNb
+          && anArgCase == "-margins"
+          && Draw::ParseInteger (theArgVec[anArgIt + 1], aParams.SubviewMargins.x())
+          && Draw::ParseInteger (theArgVec[anArgIt + 2], aParams.SubviewMargins.y()))
+    {
+      anArgIt += 2;
     }
     else if (anArgCase == "-virtual"
           || anArgCase == "-offscreen")
     {
-      isVirtual = true;
-      if (anArgIt + 1 < theArgsNb
-       && Draw::ParseOnOff (theArgVec[anArgIt + 1], isVirtual))
-      {
-        ++anArgIt;
-      }
+      aParams.IsVirtual = Draw::ParseOnOffIterator (theArgsNb, theArgVec, anArgIt);;
+    }
+    else if (anArgCase == "-composer")
+    {
+      aParams.IsComposer = Draw::ParseOnOffIterator (theArgsNb, theArgVec, anArgIt);
     }
     else if (anArgCase == "-exitonclose")
     {
-      ViewerTest_EventManager::ToExitOnCloseView() = true;
-      if (anArgIt + 1 < theArgsNb
-       && Draw::ParseOnOff (theArgVec[anArgIt + 1], ViewerTest_EventManager::ToExitOnCloseView()))
-      {
-        ++anArgIt;
-      }
+      ViewerTest_EventManager::ToExitOnCloseView() = Draw::ParseOnOffIterator (theArgsNb, theArgVec, anArgIt);;
     }
     else if (anArgCase == "-closeonescape"
           || anArgCase == "-closeonesc")
     {
-      ViewerTest_EventManager::ToCloseViewOnEscape() = true;
-      if (anArgIt + 1 < theArgsNb
-       && Draw::ParseOnOff (theArgVec[anArgIt + 1], ViewerTest_EventManager::ToCloseViewOnEscape()))
-      {
-        ++anArgIt;
-      }
+      ViewerTest_EventManager::ToCloseViewOnEscape() = Draw::ParseOnOffIterator (theArgsNb, theArgVec, anArgIt);;
     }
     else if (anArgCase == "-2d_mode"
           || anArgCase == "-2dmode"
           || anArgCase == "-2d")
     {
-      bool toEnable = true;
-      if (anArgIt + 1 < theArgsNb
-       && Draw::ParseOnOff (theArgVec[anArgIt + 1], toEnable))
-      {
-        ++anArgIt;
-      }
+      bool toEnable = Draw::ParseOnOffIterator (theArgsNb, theArgVec, anArgIt);;
       is2dMode = toEnable ? 1 : 0;
     }
     else if (anArgIt + 1 < theArgsNb
           && (anArgCase == "-disp"
            || anArgCase == "-display"))
     {
-      aDisplayName = theArgVec[++anArgIt];
+      aParams.DisplayName = theArgVec[++anArgIt];
+    }
+    else if (anArgCase == "-dpiaware")
+    {
+      aDpiAware = Draw::ParseOnOffIterator (theArgsNb, theArgVec, anArgIt) ? 1 : 0;
     }
     else if (!ViewerTest::CurrentView().IsNull()
-          &&  aCopyFrom.IsNull()
+          &&  aParams.ViewToClone.IsNull()
           && (anArgCase == "-copy"
            || anArgCase == "-clone"
            || anArgCase == "-cloneactive"
            || anArgCase == "-cloneactiveview"))
     {
-      aCopyFrom = ViewerTest::CurrentView();
+      aParams.ViewToClone = ViewerTest::CurrentView();
+    }
+    else if (!ViewerTest::CurrentView().IsNull()
+           && aParams.ParentView.IsNull()
+           && anArgCase == "-subview")
+    {
+      aParams.ParentView = ViewerTest::CurrentView();
+      if (aParams.ParentView.IsNull())
+      {
+        Message::SendFail() << "Syntax error: cannot create of subview without parent";
+        return 1;
+      }
+      if (aParams.ParentView->IsSubview())
+      {
+        aParams.ParentView = aParams.ParentView->ParentView();
+      }
+    }
+    else if (!ViewerTest::CurrentView().IsNull()
+           && aParams.ParentView.IsNull()
+           && anArgCase == "-parent"
+           && anArgIt + 1 < theArgsNb)
+    {
+      TCollection_AsciiString aParentStr (theArgVec[++anArgIt]);
+      ViewerTest_Names aViewNames (aParentStr);
+      if (!ViewerTest_myViews.IsBound1 (aViewNames.GetViewName()))
+      {
+        Message::SendFail() << "Syntax error: parent view '" << aParentStr << "' not found";
+        return 1;
+      }
+
+      aParams.ParentView = ViewerTest_myViews.Find1(aViewNames.GetViewName());
+      if (aParams.ParentView->IsSubview())
+      {
+        aParams.ParentView = aParams.ParentView->ParentView();
+      }
     }
     // old syntax
     else if (ViewerTest::SplitParameter (anArg, aName, aValue))
@@ -2249,32 +1118,32 @@ static int VInit (Draw_Interpretor& theDi, Standard_Integer theArgsNb, const cha
       aName.LowerCase();
       if (aName == "name")
       {
-        aViewName = aValue;
+        aParams.ViewName = aValue;
       }
       else if (aName == "l"
             || aName == "left")
       {
-        aPxLeft = aValue.IntegerValue();
+        aParams.Offset.x() = (float)aValue.RealValue();
       }
       else if (aName == "t"
             || aName == "top")
       {
-        aPxTop = aValue.IntegerValue();
+        aParams.Offset.y() = (float)aValue.RealValue();
       }
       else if (aName == "disp"
             || aName == "display")
       {
-        aDisplayName = aValue;
+        aParams.DisplayName = aValue;
       }
       else if (aName == "w"
             || aName == "width")
       {
-        aPxWidth = aValue.IntegerValue();
+        aParams.Size.x() = (float )aValue.RealValue();
       }
       else if (aName == "h"
             || aName == "height")
       {
-        aPxHeight = aValue.IntegerValue();
+        aParams.Size.y() = (float)aValue.RealValue();
       }
       else
       {
@@ -2282,9 +1151,9 @@ static int VInit (Draw_Interpretor& theDi, Standard_Integer theArgsNb, const cha
         return 1;
       }
     }
-    else if (aViewName.IsEmpty())
+    else if (aParams.ViewName.IsEmpty())
     {
-      aViewName = anArg;
+      aParams.ViewName = anArg;
     }
     else
     {
@@ -2293,15 +1162,47 @@ static int VInit (Draw_Interpretor& theDi, Standard_Integer theArgsNb, const cha
     }
   }
 
-#if !defined(HAVE_XLIB)
-  if (!aDisplayName.IsEmpty())
+#if defined(_WIN32)
+  if (aDpiAware != -1)
   {
-    aDisplayName.Clear();
+    typedef void* (WINAPI *SetThreadDpiAwarenessContext_t)(void*);
+    if (HMODULE aUser32Module = GetModuleHandleW (L"User32"))
+    {
+      SetThreadDpiAwarenessContext_t aSetDpiAware = (SetThreadDpiAwarenessContext_t )GetProcAddress (aUser32Module, "SetThreadDpiAwarenessContext");
+      if (aDpiAware == 1)
+      {
+        // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
+        if (aSetDpiAware ((void* )-4) == NULL)
+        {
+          // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE for older systems
+          if (aSetDpiAware ((void* )-3) == NULL)
+          {
+            Message::SendFail() << "Error: unable to enable DPI awareness";
+          }
+        }
+      }
+      else
+      {
+        // DPI_AWARENESS_CONTEXT_UNAWARE
+        if (aSetDpiAware ((void* )-1) == NULL)
+        {
+          Message::SendFail() << "Error: unable to disable DPI awareness";
+        }
+      }
+    }
+  }
+#else
+  (void )aDpiAware;
+#if !defined(HAVE_XLIB)
+  if (!aParams.DisplayName.IsEmpty())
+  {
+    aParams.DisplayName.Clear();
     Message::SendWarning() << "Warning: display parameter will be ignored.\n";
   }
 #endif
+#endif
 
-  ViewerTest_Names aViewNames (aViewName);
+  ViewerTest_Names aViewNames (aParams.ViewName);
   if (ViewerTest_myViews.IsBound1 (aViewNames.GetViewName()))
   {
     TCollection_AsciiString aCommand = TCollection_AsciiString ("vactivate ") + aViewNames.GetViewName();
@@ -2313,8 +1214,7 @@ static int VInit (Draw_Interpretor& theDi, Standard_Integer theArgsNb, const cha
     return 0;
   }
 
-  TCollection_AsciiString aViewId = ViewerTest::ViewerInit (aPxLeft, aPxTop, aPxWidth, aPxHeight,
-                                                            aViewName, aDisplayName, aCopyFrom, isVirtual);
+  TCollection_AsciiString aViewId = ViewerTest::ViewerInit (aParams);
   if (is2dMode != -1)
   {
     ViewerTest_V3dView::SetCurrentView2DMode (is2dMode == 1);
@@ -2581,29 +1481,59 @@ static TCollection_AsciiString FindViewIdByWindowHandle (Aspect_Drawable theWind
 void ActivateView (const TCollection_AsciiString& theViewName,
                    Standard_Boolean theToUpdate = Standard_True)
 {
-  const Handle(V3d_View) aView = ViewerTest_myViews.Find1(theViewName);
-  if (aView.IsNull())
+  if (const Handle(V3d_View) aView = ViewerTest_myViews.Find1(theViewName))
+  {
+    ViewerTest::ActivateView (aView, theToUpdate);
+  }
+}
+
+//==============================================================================
+//function : ActivateView
+//purpose  :
+//==============================================================================
+void ViewerTest::ActivateView (const Handle(V3d_View)& theView,
+                               Standard_Boolean theToUpdate)
+{
+  Handle(V3d_View) aView = theView;
+  const TCollection_AsciiString* aViewName = ViewerTest_myViews.Seek2 (aView);
+  if (aViewName == nullptr)
   {
     return;
   }
 
   Handle(AIS_InteractiveContext) anAISContext = FindContextByView(aView);
-  if (!anAISContext.IsNull())
+  if (anAISContext.IsNull())
   {
-    if (const Handle(V3d_View)& aCurrentView = ViewerTest::CurrentView())
+    return;
+  }
+
+  if (const Handle(V3d_View)& aCurrentView = ViewerTest::CurrentView())
+  {
+    if (!aCurrentView->Window().IsNull())
     {
       aCurrentView->Window()->SetTitle (TCollection_AsciiString ("3D View - ") + ViewerTest_myViews.Find2 (aCurrentView));
     }
+  }
 
-    ViewerTest::CurrentView (aView);
-    ViewerTest::SetAISContext (anAISContext);
-    aView->Window()->SetTitle (TCollection_AsciiString("3D View - ") + theViewName + "(*)");
-    VT_GetWindow() = Handle(ViewerTest_Window)::DownCast(ViewerTest::CurrentView()->Window());
-    SetDisplayConnection(ViewerTest::CurrentView()->Viewer()->Driver()->GetDisplayConnection());
-    if (theToUpdate)
-    {
-      ViewerTest::CurrentView()->Redraw();
-    }
+  ViewerTest::CurrentView (aView);
+  ViewerTest::SetAISContext (anAISContext);
+  if (aView->IsSubview())
+  {
+    aView->ParentView()->Window()->SetTitle (TCollection_AsciiString("3D View - ") + *aViewName + "(*)");
+    VT_GetWindow() = Handle(ViewerTest_Window)::DownCast(aView->View()->ParentView()->Window());
+  }
+  else
+  {
+    VT_GetWindow() = Handle(ViewerTest_Window)::DownCast(aView->Window());
+  }
+  if (!VT_GetWindow().IsNull())
+  {
+    VT_GetWindow()->SetTitle (TCollection_AsciiString("3D View - ") + *aViewName + "(*)");
+  }
+  SetDisplayConnection(aView->Viewer()->Driver()->GetDisplayConnection());
+  if (theToUpdate)
+  {
+    aView->Redraw();
   }
 }
 
@@ -2635,22 +1565,33 @@ void ViewerTest::RemoveView (const TCollection_AsciiString& theViewName, const S
     return;
   }
 
+  Handle(V3d_View) aView = ViewerTest_myViews.Find1(theViewName);
+  Handle(AIS_InteractiveContext) aCurrentContext = FindContextByView(aView);
+  ViewerTest_ContinuousRedrawer& aRedrawer = ViewerTest_ContinuousRedrawer::Instance();
+  aRedrawer.Stop (aView);
+  if (!aView->Subviews().IsEmpty())
+  {
+    NCollection_Sequence<Handle(V3d_View)> aSubviews = aView->Subviews();
+    for (const Handle(V3d_View)& aSubviewIter : aSubviews)
+    {
+      RemoveView (aSubviewIter, isContextRemoved);
+    }
+  }
+
   // Activate another view if it's active now
   if (ViewerTest_myViews.Find1(theViewName) == ViewerTest::CurrentView())
   {
     if (ViewerTest_myViews.Extent() > 1)
     {
-      TCollection_AsciiString aNewViewName;
       for (NCollection_DoubleMap <TCollection_AsciiString, Handle(V3d_View)>::Iterator anIter (ViewerTest_myViews);
            anIter.More(); anIter.Next())
       {
         if (anIter.Key1() != theViewName)
         {
-          aNewViewName = anIter.Key1();
+          ActivateView (anIter.Value(), true);
           break;
         }
       }
-      ActivateView (aNewViewName);
     }
     else
     {
@@ -2665,14 +1606,11 @@ void ViewerTest::RemoveView (const TCollection_AsciiString& theViewName, const S
   }
 
   // Delete view
-  Handle(V3d_View) aView = ViewerTest_myViews.Find1(theViewName);
-  Handle(AIS_InteractiveContext) aCurrentContext = FindContextByView(aView);
-  ViewerTest_ContinuousRedrawer& aRedrawer = ViewerTest_ContinuousRedrawer::Instance();
-  aRedrawer.Stop (aView->Window());
-
-  // Remove view resources
   ViewerTest_myViews.UnBind1(theViewName);
-  aView->Window()->Unmap();
+  if (!aView->Window().IsNull())
+  {
+    aView->Window()->Unmap();
+  }
   aView->Remove();
 
 #if defined(HAVE_XLIB)
@@ -2683,7 +1621,7 @@ void ViewerTest::RemoveView (const TCollection_AsciiString& theViewName, const S
   // unused empty contexts
   if (!aCurrentContext.IsNull())
   {
-    // Check if there are more difined views in the viewer
+    // Check if there are more defined views in the viewer
     if ((isContextRemoved || ViewerTest_myContexts.Size() != 1)
      && aCurrentContext->CurrentViewer()->DefinedViews().IsEmpty())
     {
@@ -3325,11 +2263,6 @@ static LRESULT WINAPI AdvViewerWindowProc (HWND theWinHandle,
       }
       return 0;
     }
-    case WM_LBUTTONDOWN:
-    {
-      TheIsAnimating = Standard_False;
-    }
-    Standard_FALLTHROUGH
     default:
     {
       const Handle(V3d_View)& aView = ViewerTest::CurrentView();
@@ -3426,14 +2359,6 @@ int ViewerMainLoop (Standard_Integer theNbArgs, const char** theArgVec)
       }
       break;
     }
-    case ButtonPress:
-    {
-      if (aReport.xbutton.button == Button1)
-      {
-        TheIsAnimating = Standard_False;
-      }
-    }
-    Standard_FALLTHROUGH
     default:
     {
       const Handle(V3d_View)& aView = ViewerTest::CurrentView();
@@ -3703,9 +2628,21 @@ static int VRepaint (Draw_Interpretor& , Standard_Integer theArgNb, const char**
       }
 
       ViewerTest_ContinuousRedrawer& aRedrawer = ViewerTest_ContinuousRedrawer::Instance();
-      if (Abs (aFps) >= 1.0)
+      ViewerTest::CurrentEventManager()->SetContinuousRedraw (false);
+      if (aFps >= 1.0)
       {
-        aRedrawer.Start (aView->Window(), aFps);
+        aRedrawer.Start (aView, aFps);
+      }
+      else if (aFps < 0.0)
+      {
+        if (ViewerTest::GetViewerFromContext()->ActiveViews().Extent() == 1)
+        {
+          aRedrawer.Stop();
+          ViewerTest::CurrentEventManager()->SetContinuousRedraw (true);
+          ViewerTest::CurrentEventManager()->FlushViewEvents (ViewerTest::GetAISContext(), ViewerTest::CurrentView(), true);
+          continue;
+        }
+        aRedrawer.Start (aView, aFps);
       }
       else
       {
@@ -3772,36 +2709,518 @@ static int VPick (Draw_Interpretor& ,
   return 0;
 }
 
-namespace
+//! Parse image fill method.
+static bool parseImageMode (const TCollection_AsciiString& theName,
+                            Aspect_FillMethod& theMode)
 {
-
-  //! Changes the background
-  //! @param theDrawInterpretor the interpreter of the Draw Harness application
-  //! @param theNumberOfCommandLineArguments the number of passed command line arguments
-  //! @param theCommandLineArguments the array of command line arguments
-  //! @return TCL_OK if changing was successful, or TCL_ERROR otherwise
-  static int vbackground (Draw_Interpretor&      theDrawInterpretor,
-                          const Standard_Integer theNumberOfCommandLineArguments,
-                          const char** const     theCommandLineArguments)
+  TCollection_AsciiString aName = theName;
+  aName.LowerCase();
+  if (aName == "none")
   {
-    if (theNumberOfCommandLineArguments < 1)
-    {
-      return TCL_ERROR;
-    }
-    BackgroundChanger aBackgroundChanger;
-    if (!aBackgroundChanger.ProcessCommandLine (theDrawInterpretor,
-                                                theNumberOfCommandLineArguments,
-                                                theCommandLineArguments))
-    {
-      theDrawInterpretor << "Wrong command arguments.\n"
-                            "Type 'help "
-                         << theCommandLineArguments[0] << "' for information about command options and its arguments.\n";
-      return TCL_ERROR;
-    }
-    return TCL_OK;
+    theMode = Aspect_FM_NONE;
+  }
+  else if (aName == "centered")
+  {
+    theMode = Aspect_FM_CENTERED;
+  }
+  else if (aName == "tiled")
+  {
+    theMode = Aspect_FM_TILED;
+  }
+  else if (aName == "stretch")
+  {
+    theMode = Aspect_FM_STRETCH;
+  }
+  else
+  {
+    return false;
+  }
+  return true;
+}
+
+//! Parse gradient fill method.
+static bool parseGradientMode (const TCollection_AsciiString& theName,
+                               Aspect_GradientFillMethod& theMode)
+{
+  TCollection_AsciiString aName = theName;
+  aName.LowerCase();
+  if (aName == "none")
+  {
+    theMode = Aspect_GradientFillMethod_None;
+  }
+  else if (aName == "hor"
+        || aName == "horizontal")
+  {
+    theMode = Aspect_GradientFillMethod_Horizontal;
+  }
+  else if (aName == "ver"
+        || aName == "vert"
+        || aName == "vertical")
+  {
+    theMode = Aspect_GradientFillMethod_Vertical;
+  }
+  else if (aName == "diag"
+        || aName == "diagonal"
+        || aName == "diag1"
+        || aName == "diagonal1")
+  {
+    theMode = Aspect_GradientFillMethod_Diagonal1;
+  }
+  else if (aName == "diag2"
+        || aName == "diagonal2")
+  {
+    theMode = Aspect_GradientFillMethod_Diagonal2;
+  }
+  else if (aName == "corner1")
+  {
+    theMode = Aspect_GradientFillMethod_Corner1;
+  }
+  else if (aName == "corner2")
+  {
+    theMode = Aspect_GradientFillMethod_Corner2;
+  }
+  else if (aName == "corner3")
+  {
+    theMode = Aspect_GradientFillMethod_Corner3;
+  }
+  else if (aName == "corner4")
+  {
+    theMode = Aspect_GradientFillMethod_Corner4;
+  }
+  else if (aName == "ellip"
+        || aName == "elliptical")
+  {
+    theMode = Aspect_GradientFillMethod_Elliptical;
+  }
+  else
+  {
+    return false;
+  }
+  return true;
+}
+
+//==============================================================================
+//function : VBackground
+//purpose  :
+//==============================================================================
+static int VBackground (Draw_Interpretor& theDI,
+                        Standard_Integer  theNbArgs,
+                        const char**      theArgVec)
+{
+  if (theNbArgs < 2)
+  {
+    theDI << "Syntax error: wrong number of arguments";
+    return 1;
   }
 
-} // namespace
+  const TCollection_AsciiString aCmdName (theArgVec[0]);
+  bool isDefault = aCmdName == "vsetdefaultbg";
+  Standard_Integer aNbColors = 0;
+  Quantity_ColorRGBA aColors[2];
+
+  Aspect_GradientFillMethod aGradientMode = Aspect_GradientFillMethod_None;
+  bool hasGradientMode = false;
+
+  TCollection_AsciiString anImagePath;
+  Aspect_FillMethod anImageMode = Aspect_FM_CENTERED;
+  bool hasImageMode = false;
+
+  bool isSkydomeBg = false;
+  Aspect_SkydomeBackground aSkydomeAspect;
+
+  NCollection_Sequence<TCollection_AsciiString> aCubeMapSeq;
+  Graphic3d_CubeMapOrder aCubeOrder = Graphic3d_CubeMapOrder::Default();
+  bool isCubeZInverted = false;
+  bool isSRgb = true;
+
+  int toUseIBL = 1;
+
+  Handle(V3d_View) aView = ViewerTest::CurrentView();
+  ViewerTest_AutoUpdater anUpdateTool (ViewerTest::GetAISContext(), aView);
+  for (Standard_Integer anArgIter = 1; anArgIter < theNbArgs; ++anArgIter)
+  {
+    TCollection_AsciiString anArg (theArgVec[anArgIter]);
+    anArg.LowerCase();
+    if (anUpdateTool.parseRedrawMode (anArg))
+    {
+      continue;
+    }
+    else if (anArg == "-default"
+          || anArg == "-def")
+    {
+      isDefault = true;
+    }
+    else if (anArgIter + 1 < theNbArgs
+          && (anArg == "-imagefile"
+           || anArg == "-imgfile"
+           || anArg == "-image"
+           || anArg == "-img"))
+    {
+      anImagePath = theArgVec[++anArgIter];
+    }
+    else if (anArg == "-skydome"
+          || anArg == "-sky")
+    {
+      isSkydomeBg = true;
+    }
+    else if (anArgIter + 3 < theNbArgs
+          && isSkydomeBg
+          && anArg == "-sundir")
+    {
+      float aX = (float) Draw::Atof (theArgVec[++anArgIter]);
+      float aY = (float) Draw::Atof (theArgVec[++anArgIter]);
+      float aZ = (float) Draw::Atof (theArgVec[++anArgIter]);
+      aSkydomeAspect.SetSunDirection (gp_Dir(aX, aY, aZ));
+    }
+    else if (anArgIter + 1 < theNbArgs
+          && isSkydomeBg
+          && anArg == "-cloud")
+    {
+      float aCloudy = (float) Draw::Atof (theArgVec[++anArgIter]);
+      aSkydomeAspect.SetCloudiness (aCloudy);
+    }
+    else if (anArgIter + 1 < theNbArgs
+          && isSkydomeBg
+          && anArg == "-time")
+    {
+      float aTime = (float) Draw::Atof (theArgVec[++anArgIter]);
+      aSkydomeAspect.SetTimeParameter (aTime);
+    }
+    else if (anArgIter + 1 < theNbArgs
+          && isSkydomeBg
+          && anArg == "-fog")
+    {
+      float aFoggy = (float) Draw::Atof (theArgVec[++anArgIter]);
+      aSkydomeAspect.SetFogginess (aFoggy);
+    }
+    else if (anArgIter + 1 < theNbArgs
+          && isSkydomeBg
+          && anArg == "-size")
+    {
+      Standard_Integer aSize = Draw::Atoi (theArgVec[++anArgIter]);
+      aSkydomeAspect.SetSize (aSize);
+    }
+    else if (anArgIter + 1 < theNbArgs
+          && aCubeMapSeq.IsEmpty()
+          && (anArg == "-cubemap"
+           || anArg == "-cmap"
+           || anArg == "-cm"))
+    {
+      aCubeMapSeq.Append (theArgVec[++anArgIter]);
+      for (Standard_Integer aCubeSideIter = 1; anArgIter + aCubeSideIter < theNbArgs; ++aCubeSideIter)
+      {
+        TCollection_AsciiString aSideArg (theArgVec[anArgIter + aCubeSideIter]);
+        if (!aSideArg.IsEmpty()
+          && aSideArg.Value (1) == '-')
+        {
+          break;
+        }
+
+        aCubeMapSeq.Append (aSideArg);
+        if (aCubeMapSeq.Size() == 6)
+        {
+          anArgIter += 5;
+          break;
+        }
+      }
+
+      if (aCubeMapSeq.Size() > 1
+       && aCubeMapSeq.Size() < 6)
+      {
+        aCubeMapSeq.Remove (2, aCubeMapSeq.Size());
+      }
+    }
+    else if (anArgIter + 6 < theNbArgs
+          && anArg == "-order")
+    {
+      for (Standard_Integer aCubeSideIter = 0; aCubeSideIter < 6; ++aCubeSideIter)
+      {
+        Standard_Integer aSideArg = 0;
+        if (!Draw::ParseInteger (theArgVec[anArgIter + aCubeSideIter + 1], aSideArg)
+         || aSideArg < 0
+         || aSideArg > 5)
+        {
+          theDI << "Syntax error at '" << theArgVec[anArgIter] << "'";
+          return 1;
+        }
+        aCubeOrder.Set ((Graphic3d_CubeMapSide )aCubeSideIter, (unsigned char )aSideArg);
+      }
+      if (!aCubeOrder.IsValid())
+      {
+        theDI << "Syntax error at '" << theArgVec[anArgIter] << "'";
+        return 1;
+      }
+      anArgIter += 6;
+    }
+    else if (anArg == "-invertedz"
+          || anArg == "-noinvertedz"
+          || anArg == "-invz"
+          || anArg == "-noinvz")
+    {
+      isCubeZInverted = Draw::ParseOnOffNoIterator (theNbArgs, theArgVec, anArgIter);
+    }
+    else if (anArg == "-pbrenv"
+          || anArg == "-nopbrenv"
+          || anArg == "-ibl"
+          || anArg == "-noibl")
+    {
+      toUseIBL = !anArg.StartsWith ("-no") ? 1 : 0;
+      if (anArgIter + 1 < theNbArgs)
+      {
+        TCollection_AsciiString anIblArg (theArgVec[anArgIter + 1]);
+        anIblArg.LowerCase();
+        if (anIblArg == "keep"
+         || anIblArg == "-1")
+        {
+          toUseIBL = -1;
+          ++anArgIter;
+        }
+        else if (anIblArg == "ibl"
+              || anIblArg == "1"
+              || anIblArg == "on")
+        {
+          toUseIBL = !anArg.StartsWith ("-no") ? 1 : 0;
+          ++anArgIter;
+        }
+        else if (anIblArg == "noibl"
+              || anIblArg == "0"
+              || anIblArg == "off")
+        {
+          toUseIBL = !anArg.StartsWith ("-no") ? 0 : 1;
+          ++anArgIter;
+        }
+      }
+    }
+    else if (anArg == "-srgb"
+          || anArg == "-nosrgb")
+    {
+      isSRgb = Draw::ParseOnOffNoIterator (theNbArgs, theArgVec, anArgIter);
+    }
+    else if (aNbColors < 2
+          && (anArg == "-color"
+           || anArg == "-col"))
+    {
+      Standard_Integer aNbParsed = Draw::ParseColor (theNbArgs - (anArgIter + 1),
+                                                     theArgVec + (anArgIter + 1),
+                                                     aColors[aNbColors].ChangeRGB());
+      if (aNbParsed == 0)
+      {
+        theDI << "Syntax error at '" << theArgVec[anArgIter] << "'";
+        return 1;
+      }
+      anArgIter += aNbParsed;
+      ++aNbColors;
+    }
+    else if (anArgIter + 1 < theNbArgs
+          && (anArg == "-gradientmode"
+           || anArg == "-gradmode"
+           || anArg == "-gradmd"
+           || anArg == "-grmode"
+           || anArg == "-grmd")
+          && parseGradientMode (theArgVec[anArgIter + 1], aGradientMode))
+    {
+      ++anArgIter;
+      hasGradientMode = true;
+    }
+    else if (anArgIter + 1 < theNbArgs
+          && (anArg == "-imagemode"
+           || anArg == "-imgmode"
+           || anArg == "-imagemd"
+           || anArg == "-imgmd")
+          && parseImageMode (theArgVec[anArgIter + 1], anImageMode))
+    {
+      ++anArgIter;
+      hasImageMode = true;
+    }
+    else if (aNbColors == 0
+          && anArgIter + 2 < theNbArgs
+          && (anArg == "-gradient"
+           || anArg == "-grad"
+           || anArg == "-gr"))
+    {
+      Standard_Integer aNbParsed1 = Draw::ParseColor (theNbArgs - (anArgIter + 1),
+                                                      theArgVec + (anArgIter + 1),
+                                                      aColors[aNbColors].ChangeRGB());
+      anArgIter += aNbParsed1;
+      ++aNbColors;
+      if (aNbParsed1 == 0)
+      {
+        theDI << "Syntax error at '" << theArgVec[anArgIter] << "'";
+        return 1;
+      }
+      Standard_Integer aNbParsed2 = Draw::ParseColor (theNbArgs - (anArgIter + 1),
+                                                      theArgVec + (anArgIter + 1),
+                                                      aColors[aNbColors].ChangeRGB());
+      anArgIter += aNbParsed2;
+      ++aNbColors;
+      if (aNbParsed2 == 0)
+      {
+        theDI << "Syntax error at '" << theArgVec[anArgIter] << "'";
+        return 1;
+      }
+    }
+    else if (parseGradientMode (theArgVec[anArgIter], aGradientMode))
+    {
+      hasGradientMode = true;
+    }
+    else if (aNbColors < 2
+          && (Quantity_ColorRGBA::ColorFromName(theArgVec[anArgIter], aColors[aNbColors])
+           || Quantity_ColorRGBA::ColorFromHex (theArgVec[anArgIter], aColors[aNbColors])))
+    {
+      ++aNbColors;
+    }
+    else if (anImagePath.IsEmpty()
+         &&  aNbColors == 0
+         && !hasGradientMode
+         &&  aCubeMapSeq.IsEmpty())
+    {
+      anImagePath = theArgVec[anArgIter];
+    }
+    else
+    {
+      theDI << "Syntax error at '" << theArgVec[anArgIter] << "'";
+      return 1;
+    }
+  }
+
+  if (!isDefault
+   && aView.IsNull())
+  {
+    theDI << "Error: no active viewer";
+    return 1;
+  }
+  else if (isDefault
+       &&  aNbColors == 0
+       && !hasGradientMode)
+  {
+    theDI << "Syntax error at '-default'";
+    return 1;
+  }
+
+  if (aNbColors == 1)
+  {
+    if (isDefault)
+    {
+      ViewerTest_DefaultBackground.GradientColor1 = Quantity_Color();
+      ViewerTest_DefaultBackground.GradientColor2 = Quantity_Color();
+      ViewerTest_DefaultBackground.FillMethod     = Aspect_GradientFillMethod_None;
+      ViewerTest_DefaultBackground.FlatColor      = aColors[0].GetRGB();
+      ViewerTest_DefaultBackground.SetDefaultGradient();
+      ViewerTest_DefaultBackground.SetDefaultColor();
+    }
+    else
+    {
+      aView->SetBgGradientStyle (hasGradientMode ? aGradientMode : Aspect_GradientFillMethod_None);
+      aView->SetBackgroundColor (aColors[0].GetRGB());
+      if (toUseIBL != -1)
+      {
+        aView->SetBackgroundCubeMap (Handle(Graphic3d_CubeMap)(), true);
+      }
+    }
+  }
+  else if (aNbColors == 2)
+  {
+    if (isDefault)
+    {
+      ViewerTest_DefaultBackground.GradientColor1 = aColors[0].GetRGB();
+      ViewerTest_DefaultBackground.GradientColor2 = aColors[1].GetRGB();
+      if (hasGradientMode)
+      {
+        ViewerTest_DefaultBackground.FillMethod = aGradientMode;
+      }
+      else if (ViewerTest_DefaultBackground.FillMethod == Aspect_GradientFillMethod_None)
+      {
+        ViewerTest_DefaultBackground.FillMethod = Aspect_GradientFillMethod_Vertical;
+      }
+      ViewerTest_DefaultBackground.SetDefaultGradient();
+    }
+    else
+    {
+      if (!hasGradientMode)
+      {
+        aGradientMode = aView->GradientBackground().BgGradientFillMethod();
+        if (aGradientMode == Aspect_GradientFillMethod_None)
+        {
+          aGradientMode = Aspect_GradientFillMethod_Vertical;
+        }
+      }
+      aView->SetBgGradientColors (aColors[0].GetRGB(), aColors[1].GetRGB(), aGradientMode);
+      if (toUseIBL != -1)
+      {
+        aView->SetBackgroundCubeMap (Handle(Graphic3d_CubeMap)(), true);
+      }
+    }
+  }
+  else if (hasGradientMode)
+  {
+    if (isDefault)
+    {
+      ViewerTest_DefaultBackground.FillMethod = aGradientMode;
+      ViewerTest_DefaultBackground.SetDefaultGradient();
+    }
+    else
+    {
+      aView->SetBgGradientStyle (aGradientMode);
+    }
+  }
+
+  if (!anImagePath.IsEmpty())
+  {
+    Handle(Graphic3d_Texture2D) aTextureMap = new Graphic3d_Texture2D (anImagePath);
+    aTextureMap->DisableModulate();
+    aTextureMap->SetColorMap (isSRgb);
+    if (!aTextureMap->IsDone())
+    {
+      theDI << "Syntax error at '" << anImagePath << "'";
+      return 1;
+    }
+    aView->SetBackgroundImage (aTextureMap, anImageMode);
+  }
+  else if (hasImageMode)
+  {
+    aView->SetBgImageStyle (anImageMode);
+  }
+
+  if (isSkydomeBg)
+  {
+    aView->SetBackgroundSkydome (aSkydomeAspect, toUseIBL != -1);
+  }
+
+  if (!aCubeMapSeq.IsEmpty())
+  {
+    Handle(Graphic3d_CubeMap) aCubeMap;
+    if (aCubeMapSeq.Size() == 1)
+    {
+      aCubeMap = new Graphic3d_CubeMapPacked (aCubeMapSeq.First(), aCubeOrder.Validated());
+    }
+    else
+    {
+      NCollection_Array1<TCollection_AsciiString> aCubeMapArr (0, 5);
+      Standard_Integer aCubeSide = 0;
+      for (NCollection_Sequence<TCollection_AsciiString>::Iterator aFileIter (aCubeMapSeq); aFileIter.More(); aFileIter.Next(), ++aCubeSide)
+      {
+        aCubeMapArr[aCubeSide] = aFileIter.Value();
+      }
+      aCubeMap = new Graphic3d_CubeMapSeparate (aCubeMapArr);
+    }
+
+    aCubeMap->SetZInversion (isCubeZInverted);
+    aCubeMap->SetColorMap (isSRgb);
+
+    aCubeMap->GetParams()->SetFilter (Graphic3d_TOTF_BILINEAR);
+    aCubeMap->GetParams()->SetRepeat (false);
+    aCubeMap->GetParams()->SetTextureUnit (Graphic3d_TextureUnit_EnvMap);
+
+    aView->SetBackgroundCubeMap (aCubeMap, toUseIBL != -1);
+  }
+  if (toUseIBL != -1
+  && !aView.IsNull())
+  {
+    aView->SetImageBasedLighting (toUseIBL == 1);
+  }
+
+  return 0;
+}
 
 //==============================================================================
 //function : VScale
@@ -3874,47 +3293,13 @@ static int VZBuffTrihedron (Draw_Interpretor& /*theDI*/,
     {
       if (++anArgIter >= theArgNb)
       {
-        Message::SendFail() << "Error: wrong syntax at '" << anArg << "'";
+        Message::SendFail() << "Syntax error at '" << anArg << "'";
         return 1;
       }
 
-      TCollection_AsciiString aPosName (theArgVec[anArgIter]);
-      aPosName.LowerCase();
-      if (aPosName == "center")
+      if (!ViewerTest::ParseCorner (theArgVec[anArgIter], aPosition))
       {
-        aPosition = Aspect_TOTP_CENTER;
-      }
-      else if (aPosName == "left_lower"
-            || aPosName == "lower_left"
-            || aPosName == "leftlower"
-            || aPosName == "lowerleft")
-      {
-        aPosition = Aspect_TOTP_LEFT_LOWER;
-      }
-      else if (aPosName == "left_upper"
-            || aPosName == "upper_left"
-            || aPosName == "leftupper"
-            || aPosName == "upperleft")
-      {
-        aPosition = Aspect_TOTP_LEFT_UPPER;
-      }
-      else if (aPosName == "right_lower"
-            || aPosName == "lower_right"
-            || aPosName == "rightlower"
-            || aPosName == "lowerright")
-      {
-        aPosition = Aspect_TOTP_RIGHT_LOWER;
-      }
-      else if (aPosName == "right_upper"
-            || aPosName == "upper_right"
-            || aPosName == "rightupper"
-            || aPosName == "upperright")
-      {
-        aPosition = Aspect_TOTP_RIGHT_UPPER;
-      }
-      else
-      {
-        Message::SendFail() << "Error: wrong syntax at '" << anArg << "' - unknown position '" << aPosName << "'";
+        Message::SendFail() << "Syntax error at '" << anArg << "' - unknown position '" << theArgVec[anArgIter] << "'";
         return 1;
       }
     }
@@ -6575,7 +5960,7 @@ public:
       aMat.SetSpecularColor (Quantity_NOC_BLACK);
       aMat.SetEmissiveColor (Quantity_NOC_BLACK);
       aFillAspect->SetFrontMaterial (aMat);
-      aFillAspect->SetTextureMap (new Graphic3d_Texture2Dmanual (theImage));
+      aFillAspect->SetTextureMap (new Graphic3d_Texture2D (theImage));
       aFillAspect->SetTextureMapOn();
     }
     {
@@ -6836,15 +6221,13 @@ static int VDiffImage (Draw_Interpretor& theDI, Standard_Integer theArgNb, const
     theDI.Eval (aCommand.ToCString());
   }
 
-  Standard_Integer aPxLeft = 0;
-  Standard_Integer aPxTop  = 0;
-  Standard_Integer aWinSizeX = int(anImgRef->SizeX() * 2);
-  Standard_Integer aWinSizeY = !aDiff.IsNull() && !aPrsNameDiff.IsEmpty()
-                              ? int(anImgRef->SizeY() * 2)
-                              : int(anImgRef->SizeY());
-  TCollection_AsciiString aDisplayName;
-  TCollection_AsciiString aViewId = ViewerTest::ViewerInit (aPxLeft, aPxTop, aWinSizeX, aWinSizeY,
-                                                            aViewName, aDisplayName);
+  ViewerTest_VinitParams aParams;
+  aParams.ViewName = aViewName;
+  aParams.Size.x() = float(anImgRef->SizeX() * 2);
+  aParams.Size.y() = !aDiff.IsNull() && !aPrsNameDiff.IsEmpty()
+                   ? float(anImgRef->SizeY() * 2)
+                   : float(anImgRef->SizeY());
+  TCollection_AsciiString aViewId = ViewerTest::ViewerInit (aParams);
 
   Standard_Real aRatio = anImgRef->Ratio();
   Standard_Real aSizeX = 1.0;
@@ -7224,16 +6607,9 @@ static Standard_Integer VSelectByAxis (Draw_Interpretor& theDI,
     Quantity_Color anAxisColor = Quantity_NOC_GREEN;
     Handle(Geom_Axis2Placement) anAx2Axis =
       new Geom_Axis2Placement (gp_Ax2(anAxisLocation, anAxisDirection));
-    Handle(AIS_Axis) anAISAxis = new AIS_Axis (anAx2Axis, AIS_TOAX_ZAxis);
-    const Handle(Prs3d_Drawer)& anAxisDrawer = anAISAxis->Attributes();
-    anAxisDrawer->SetOwnDatumAspects();
-    Standard_Real aLength = UnitsAPI::AnyToLS (250000., "mm");
-    anAxisDrawer->DatumAspect()->SetAxisLength (aLength, aLength, aLength);
-    anAxisDrawer->DatumAspect()->SetDrawLabels (false);
-    anAxisDrawer->DatumAspect()->SetDrawArrows (true);
-    anAISAxis->SetColor (Quantity_NOC_GREEN);
-    anAISAxis->SetAxis2Placement (anAx2Axis, AIS_TOAX_ZAxis); // This is workaround to update axis length
-    ViewerTest::Display (TCollection_AsciiString(aName) + "_axis", anAISAxis, false);
+    Handle(AIS_Axis) anAISAxis = new AIS_Axis (gp_Ax1 (anAxisLocation, anAxisDirection));
+    anAISAxis->SetColor (anAxisColor);
+    ViewerTest::Display (TCollection_AsciiString (aName) + "_axis", anAISAxis, false);
 
     // Display axis start point
     Handle(AIS_Point) anAISStartPnt = new AIS_Point (new Geom_CartesianPoint (anAxisLocation));
@@ -7253,16 +6629,9 @@ static Standard_Integer VSelectByAxis (Draw_Interpretor& theDI,
         Standard_Real aNormalLength = aNormalLengths.Value (anIndex + 1);
         if (aNormal.SquareModulus() > ShortRealEpsilon())
         {
-          Handle(Geom_Axis2Placement) anAx2Normal =
-            new Geom_Axis2Placement(gp_Ax2(aPoint, gp_Dir((Standard_Real )aNormal.x(), (Standard_Real )aNormal.y(), (Standard_Real )aNormal.z())));
-          Handle(AIS_Axis) anAISNormal = new AIS_Axis (anAx2Normal, AIS_TOAX_ZAxis);
-          const Handle(Prs3d_Drawer)& aNormalDrawer = anAISNormal->Attributes();
-          aNormalDrawer->SetOwnDatumAspects();
-          aNormalDrawer->DatumAspect()->SetAxisLength (aNormalLength, aNormalLength, aNormalLength);
-          aNormalDrawer->DatumAspect()->SetDrawLabels (false);
-          aNormalDrawer->DatumAspect()->SetDrawArrows (true);
+          gp_Dir aNormalDir ((Standard_Real)aNormal.x(), (Standard_Real)aNormal.y(), (Standard_Real)aNormal.z());
+          Handle(AIS_Axis) anAISNormal = new AIS_Axis (gp_Ax1 (aPoint, aNormalDir), aNormalLength);
           anAISNormal->SetColor (Quantity_NOC_BLUE);
-          anAISNormal->SetAxis2Placement (anAx2Normal, AIS_TOAX_ZAxis); // This is workaround to update axis length
           anAISNormal->SetInfiniteState (false);
           ViewerTest::Display (TCollection_AsciiString(aName) + "_normal_" + anIndex, anAISNormal, false);
         }
@@ -7296,6 +6665,7 @@ namespace
   //! The animation calling the Draw Harness command.
   class ViewerTest_AnimationProc : public AIS_Animation
   {
+    DEFINE_STANDARD_RTTI_INLINE(ViewerTest_AnimationProc, AIS_Animation)
   public:
 
     //! Main constructor.
@@ -7360,6 +6730,85 @@ namespace
     Draw_Interpretor*       myDrawInter;
     TCollection_AsciiString myCommand;
 
+  };
+
+  //! Auxiliary animation holder.
+  class ViewerTest_AnimationHolder : public AIS_AnimationCamera
+  {
+    DEFINE_STANDARD_RTTI_INLINE(ViewerTest_AnimationHolder, AIS_AnimationCamera)
+  public:
+    ViewerTest_AnimationHolder (const Handle(AIS_Animation)& theAnim,
+                                const Handle(V3d_View)& theView,
+                                const Standard_Boolean theIsFreeView)
+    : AIS_AnimationCamera ("ViewerTest_AnimationHolder", Handle(V3d_View)())
+    {
+      if (theAnim->Timer().IsNull())
+      {
+        theAnim->SetTimer (new Media_Timer());
+      }
+      myTimer = theAnim->Timer();
+      myView = theView;
+      if (theIsFreeView)
+      {
+        myCamStart = new Graphic3d_Camera (theView->Camera());
+      }
+      Add (theAnim);
+    }
+
+    //! Start playback.
+    virtual void StartTimer (const Standard_Real    theStartPts,
+                             const Standard_Real    thePlaySpeed,
+                             const Standard_Boolean theToUpdate,
+                             const Standard_Boolean theToStopTimer) Standard_OVERRIDE
+    {
+      base_type::StartTimer (theStartPts, thePlaySpeed, theToUpdate, theToStopTimer);
+      if (theToStopTimer)
+      {
+        abortPlayback();
+      }
+    }
+
+    //! Pause animation.
+    virtual void Pause() Standard_OVERRIDE
+    {
+      myState = AnimationState_Paused;
+      // default implementation would stop all children,
+      // but we want to keep wrapped animation paused
+      myAnimations.First()->Pause();
+      abortPlayback();
+    }
+
+    //! Stop animation.
+    virtual void Stop() Standard_OVERRIDE
+    {
+      base_type::Stop();
+      abortPlayback();
+    }
+
+    //! Process one step of the animation according to the input time progress, including all children.
+    virtual void updateWithChildren (const AIS_AnimationProgress& thePosition) Standard_OVERRIDE
+    {
+      Handle(V3d_View) aView = myView;
+      if (!aView.IsNull()
+       && !myCamStart.IsNull())
+      {
+        myCamStart->Copy (aView->Camera());
+      }
+      base_type::updateWithChildren (thePosition);
+      if (!aView.IsNull()
+       && !myCamStart.IsNull())
+      {
+        aView->Camera()->Copy (myCamStart);
+      }
+    }
+  private:
+    void abortPlayback()
+    {
+      if (!myView.IsNull())
+      {
+        myView.Nullify();
+      }
+    }
   };
 
   //! Replace the animation with the new one.
@@ -7838,6 +7287,11 @@ static Standard_Integer VAnimation (Draw_Interpretor& theDI,
       }
     }
   }
+  if (anAnimation.IsNull())
+  {
+    Message::SendFail() << "Syntax error: wrong number of arguments";
+    return 1;
+  }
 
   if (anArgIter >= theArgNb)
   {
@@ -7855,6 +7309,7 @@ static Standard_Integer VAnimation (Draw_Interpretor& theDI,
   Standard_Real aPlayStartTime = anAnimation->StartPts();
   Standard_Real aPlayDuration  = anAnimation->Duration();
   Standard_Boolean isFreeCamera = Standard_False;
+  Standard_Boolean toPauseOnClick = Standard_True;
   Standard_Boolean isLockLoop   = Standard_False;
 
   // video recording parameters
@@ -7876,7 +7331,7 @@ static Standard_Integer VAnimation (Draw_Interpretor& theDI,
           || anArg == "-del"
           || anArg == "-delete")
     {
-      if (!aParentAnimation.IsNull())
+      if (aParentAnimation.IsNull())
       {
         ViewerTest_AnimationTimelineMap.UnBind (anAnimation->Name());
       }
@@ -7924,6 +7379,14 @@ static Standard_Integer VAnimation (Draw_Interpretor& theDI,
         aPlayDuration = Draw::Atof (theArgVec[anArgIter]);
       }
     }
+    else if (anArg == "-pause")
+    {
+      anAnimation->Pause();
+    }
+    else if (anArg == "-stop")
+    {
+      anAnimation->Stop();
+    }
     else if (anArg == "-playspeed"
           || anArg == "-speed")
     {
@@ -7938,13 +7401,22 @@ static Standard_Integer VAnimation (Draw_Interpretor& theDI,
           || anArg == "-lockloop"
           || anArg == "-playlockloop")
     {
-      isLockLoop = Standard_True;
+      isLockLoop = Draw::ParseOnOffIterator (theArgNb, theArgVec, anArgIter);
     }
     else if (anArg == "-freecamera"
+          || anArg == "-nofreecamera"
           || anArg == "-playfreecamera"
-          || anArg == "-freelook")
+          || anArg == "-noplayfreecamera"
+          || anArg == "-freelook"
+          || anArg == "-nofreelook")
     {
-      isFreeCamera = Standard_True;
+      isFreeCamera = Draw::ParseOnOffNoIterator (theArgNb, theArgVec, anArgIter);
+    }
+    else if (anArg == "-pauseonclick"
+          || anArg == "-nopauseonclick"
+          || anArg == "-nopause")
+    {
+      toPauseOnClick = Draw::ParseOnOffNoIterator (theArgNb, theArgVec, anArgIter);
     }
     // video recodring options
     else if (anArg == "-rec"
@@ -8300,155 +7772,118 @@ static Standard_Integer VAnimation (Draw_Interpretor& theDI,
     }
   }
 
+  ViewerTest::CurrentEventManager()->AbortViewAnimation();
+  ViewerTest::CurrentEventManager()->SetObjectsAnimation (Handle(AIS_Animation)());
   if (!toPlay && aRecFile.IsEmpty())
   {
     return 0;
   }
 
   // Start animation timeline and process frame updating.
-  TheIsAnimating = Standard_True;
-  const Standard_Boolean wasImmediateUpdate = aView->SetImmediateUpdate (Standard_False);
-  Handle(Graphic3d_Camera) aCameraBack = new Graphic3d_Camera (aView->Camera());
-  anAnimation->StartTimer (aPlayStartTime, aPlaySpeed, Standard_True, aPlayDuration <= 0.0);
-  if (isFreeCamera)
+  if (aRecParams.FpsNum <= 0
+  && !isLockLoop)
   {
-    aView->Camera()->Copy (aCameraBack);
+    Handle(ViewerTest_AnimationHolder) aHolder = new ViewerTest_AnimationHolder (anAnimation, aView, isFreeCamera);
+    aHolder->StartTimer (aPlayStartTime, aPlaySpeed, Standard_True, aPlayDuration <= 0.0);
+    ViewerTest::CurrentEventManager()->SetPauseObjectsAnimation (toPauseOnClick);
+    ViewerTest::CurrentEventManager()->SetObjectsAnimation (aHolder);
+    ViewerTest::CurrentEventManager()->ProcessExpose();
+    return 0;
   }
 
+  // Perform video recording
+  const Standard_Boolean wasImmediateUpdate = aView->SetImmediateUpdate (Standard_False);
   const Standard_Real anUpperPts = aPlayStartTime + aPlayDuration;
-  if (aRecParams.FpsNum <= 0)
+  anAnimation->StartTimer (aPlayStartTime, aPlaySpeed, Standard_True, aPlayDuration <= 0.0);
+
+  OSD_Timer aPerfTimer;
+  aPerfTimer.Start();
+
+  Handle(Image_VideoRecorder) aRecorder;
+  ImageFlipper aFlipper;
+  Handle(Draw_ProgressIndicator) aProgress;
+  if (!aRecFile.IsEmpty())
   {
-    while (!anAnimation->IsStopped())
+    if (aRecParams.Width  <= 0
+     || aRecParams.Height <= 0)
     {
-      aCameraBack->Copy (aView->Camera());
-      const Standard_Real aPts = anAnimation->UpdateTimer();
-      if (isFreeCamera)
-      {
-        aView->Camera()->Copy (aCameraBack);
-      }
-
-      if (aPts >= anUpperPts)
-      {
-        anAnimation->Pause();
-        break;
-      }
-
-      if (aView->IsInvalidated())
-      {
-        aView->Redraw();
-      }
-      else
-      {
-        aView->RedrawImmediate();
-      }
-
-      if (!isLockLoop)
-      {
-        // handle user events
-        theDI.Eval ("after 1 set waiter 1");
-        theDI.Eval ("vwait waiter");
-      }
-      if (!TheIsAnimating)
-      {
-        anAnimation->Pause();
-        theDI << aPts;
-        break;
-      }
+      aView->Window()->Size (aRecParams.Width, aRecParams.Height);
     }
 
-    if (aView->IsInvalidated())
+    aRecorder = new Image_VideoRecorder();
+    if (!aRecorder->Open (aRecFile.ToCString(), aRecParams))
     {
-      aView->Redraw();
+      Message::SendFail ("Error: failed to open video file for recording");
+      return 0;
+    }
+
+    aProgress = new Draw_ProgressIndicator (theDI, 1);
+  }
+
+  // Manage frame-rated animation here
+  Standard_Real aPts = aPlayStartTime;
+  int64_t aNbFrames = 0;
+  Message_ProgressScope aPS(Message_ProgressIndicator::Start(aProgress),
+                            "Video recording, sec", Max(1, Standard_Integer(aPlayDuration / aPlaySpeed)));
+  Standard_Integer aSecondsProgress = 0;
+  for (; aPts <= anUpperPts && aPS.More();)
+  {
+    Standard_Real aRecPts = 0.0;
+    if (aRecParams.FpsNum > 0)
+    {
+      aRecPts = aPlaySpeed * ((Standard_Real(aRecParams.FpsDen) / Standard_Real(aRecParams.FpsNum)) * Standard_Real(aNbFrames));
     }
     else
     {
-      aView->RedrawImmediate();
+      aRecPts = aPlaySpeed * aPerfTimer.ElapsedTime();
     }
-  }
-  else
-  {
-    OSD_Timer aPerfTimer;
-    aPerfTimer.Start();
 
-    Handle(Image_VideoRecorder) aRecorder;
-    ImageFlipper aFlipper;
-    Handle(Draw_ProgressIndicator) aProgress;
-    if (!aRecFile.IsEmpty())
+    aPts = aPlayStartTime + aRecPts;
+    ++aNbFrames;
+    if (!anAnimation->Update (aPts))
     {
-      if (aRecParams.Width  <= 0
-       || aRecParams.Height <= 0)
-      {
-        aView->Window()->Size (aRecParams.Width, aRecParams.Height);
-      }
+      break;
+    }
 
-      aRecorder = new Image_VideoRecorder();
-      if (!aRecorder->Open (aRecFile.ToCString(), aRecParams))
+    if (!aRecorder.IsNull())
+    {
+      V3d_ImageDumpOptions aDumpParams;
+      aDumpParams.Width          = aRecParams.Width;
+      aDumpParams.Height         = aRecParams.Height;
+      aDumpParams.BufferType     = Graphic3d_BT_RGBA;
+      aDumpParams.StereoOptions  = V3d_SDO_MONO;
+      aDumpParams.ToAdjustAspect = Standard_True;
+      if (!aView->ToPixMap (aRecorder->ChangeFrame(), aDumpParams))
       {
-        Message::SendFail ("Error: failed to open video file for recording");
+        Message::SendFail ("Error: view dump is failed");
         return 0;
       }
-
-      aProgress = new Draw_ProgressIndicator (theDI, 1);
+      aFlipper.FlipY (aRecorder->ChangeFrame());
+      if (!aRecorder->PushFrame())
+      {
+        return 0;
+      }
     }
-
-    // Manage frame-rated animation here
-    Standard_Real aPts = aPlayStartTime;
-    int64_t aNbFrames = 0;
-    Message_ProgressScope aPS(Message_ProgressIndicator::Start(aProgress),
-                              "Video recording, sec", Max(1, Standard_Integer(aPlayDuration / aPlaySpeed)));
-    Standard_Integer aSecondsProgress = 0;
-    for (; aPts <= anUpperPts && aPS.More();)
+    else
     {
-      const Standard_Real aRecPts = aPlaySpeed * ((Standard_Real(aRecParams.FpsDen) / Standard_Real(aRecParams.FpsNum)) * Standard_Real(aNbFrames));
-      aPts = aPlayStartTime + aRecPts;
-      ++aNbFrames;
-      if (!anAnimation->Update (aPts))
-      {
-        break;
-      }
-
-      if (!aRecorder.IsNull())
-      {
-        V3d_ImageDumpOptions aDumpParams;
-        aDumpParams.Width          = aRecParams.Width;
-        aDumpParams.Height         = aRecParams.Height;
-        aDumpParams.BufferType     = Graphic3d_BT_RGBA;
-        aDumpParams.StereoOptions  = V3d_SDO_MONO;
-        aDumpParams.ToAdjustAspect = Standard_True;
-        if (!aView->ToPixMap (aRecorder->ChangeFrame(), aDumpParams))
-        {
-          Message::SendFail ("Error: view dump is failed");
-          return 0;
-        }
-        aFlipper.FlipY (aRecorder->ChangeFrame());
-        if (!aRecorder->PushFrame())
-        {
-          return 0;
-        }
-      }
-      else
-      {
-        aView->Redraw();
-      }
-
-      while (aSecondsProgress < Standard_Integer(aRecPts / aPlaySpeed))
-      {
-        aPS.Next();
-        ++aSecondsProgress;
-      }
+      aView->Redraw();
     }
 
-    aPerfTimer.Stop();
-    anAnimation->Stop();
-    const Standard_Real aRecFps = Standard_Real(aNbFrames) / aPerfTimer.ElapsedTime();
-    theDI << "Average FPS: " << aRecFps << "\n"
-          << "Nb. Frames: "  << Standard_Real(aNbFrames);
-
-    aView->Redraw();
+    while (aSecondsProgress < Standard_Integer(aRecPts / aPlaySpeed))
+    {
+      aPS.Next();
+      ++aSecondsProgress;
+    }
   }
 
+  aPerfTimer.Stop();
+  anAnimation->Stop();
+  const Standard_Real aRecFps = Standard_Real(aNbFrames) / aPerfTimer.ElapsedTime();
+  theDI << "Average FPS: " << aRecFps << "\n"
+        << "Nb. Frames: "  << Standard_Real(aNbFrames);
+
+  aView->Redraw();
   aView->SetImmediateUpdate (wasImmediateUpdate);
-  TheIsAnimating = Standard_False;
   return 0;
 }
 
@@ -9235,7 +8670,7 @@ static int VClipPlane (Draw_Interpretor& theDi, Standard_Integer theArgsNb, cons
       }
 
       TCollection_AsciiString aTextureName (aChangeArgs[1]);
-      Handle(Graphic3d_Texture2Dmanual) aTexture = new Graphic3d_Texture2Dmanual(aTextureName);
+      Handle(Graphic3d_Texture2D) aTexture = new Graphic3d_Texture2D (aTextureName);
       if (!aTexture->IsDone())
       {
         aClipPlane->SetCappingTexture (NULL);
@@ -9719,6 +9154,85 @@ static int VCamera (Draw_Interpretor& theDI,
       }
       ViewerTest::CurrentEventManager()->SetLockOrbitZUp (toLockUp);
     }
+    else if (anArgCase == "-rotationmode"
+          || anArgCase == "-rotmode")
+    {
+      AIS_RotationMode aRotMode = AIS_RotationMode_BndBoxActive;
+      TCollection_AsciiString aRotStr ((anArgIter + 1 < theArgsNb) ? theArgVec[anArgIter + 1] : "");
+      aRotStr.LowerCase();
+      if (aRotStr == "bndboxactive"
+       || aRotStr == "active")
+      {
+        aRotMode = AIS_RotationMode_BndBoxActive;
+      }
+      else if (aRotStr == "picklast"
+            || aRotStr == "pick")
+      {
+        aRotMode = AIS_RotationMode_PickLast;
+      }
+      else if (aRotStr == "pickcenter")
+      {
+        aRotMode = AIS_RotationMode_PickCenter;
+      }
+      else if (aRotStr == "cameraat"
+            || aRotStr == "cameracenter")
+      {
+        aRotMode = AIS_RotationMode_CameraAt;
+      }
+      else if (aRotStr == "bndboxscene"
+            || aRotStr == "boxscene")
+      {
+        aRotMode = AIS_RotationMode_BndBoxScene;
+      }
+      else
+      {
+        Message::SendFail() << "Syntax error at '" << theArgVec[anArgIter] << "'";
+        return 1;
+      }
+
+      ViewerTest::CurrentEventManager()->SetRotationMode (aRotMode);
+      ++anArgIter;
+    }
+    else if (anArgCase == "-navigationmode"
+          || anArgCase == "-navmode")
+    {
+      AIS_NavigationMode aNavMode = AIS_NavigationMode_Orbit;
+      TCollection_AsciiString aNavStr ((anArgIter + 1 < theArgsNb) ? theArgVec[anArgIter + 1] : "");
+      aNavStr.LowerCase();
+      if (aNavStr == "orbit")
+      {
+        aNavMode = AIS_NavigationMode_Orbit;
+      }
+      else if (aNavStr == "flight"
+            || aNavStr == "fly"
+            || aNavStr == "copter"
+            || aNavStr == "helicopter")
+      {
+        aNavMode = AIS_NavigationMode_FirstPersonFlight;
+      }
+      else if (aNavStr == "walk"
+            || aNavStr == "shooter")
+      {
+        aNavMode = AIS_NavigationMode_FirstPersonWalk;
+      }
+      else
+      {
+        Message::SendFail() << "Syntax error at '" << theArgVec[anArgIter] << "'";
+        return 1;
+      }
+
+      Handle(ViewerTest_EventManager) aViewMgr = ViewerTest::CurrentEventManager();
+      aViewMgr->SetNavigationMode (aNavMode);
+      if (aNavMode == AIS_NavigationMode_Orbit)
+      {
+        aViewMgr->ChangeMouseGestureMap().Bind (Aspect_VKeyMouse_LeftButton, AIS_MouseGesture_RotateOrbit);
+      }
+      else
+      {
+        aViewMgr->ChangeMouseGestureMap().Bind (Aspect_VKeyMouse_LeftButton, AIS_MouseGesture_RotateView);
+      }
+      ++anArgIter;
+    }
     else if (anArgCase == "-fov"
           || anArgCase == "-fovy"
           || anArgCase == "-fovx"
@@ -9956,15 +9470,60 @@ static int VStereo (Draw_Interpretor& theDI,
       TCollection_AsciiString aMode;
       switch (aView->RenderingParams().StereoMode)
       {
-        case Graphic3d_StereoMode_QuadBuffer       : aMode = "quadBuffer";       break;
-        case Graphic3d_StereoMode_RowInterlaced    : aMode = "rowInterlaced";    break;
-        case Graphic3d_StereoMode_ColumnInterlaced : aMode = "columnInterlaced"; break;
-        case Graphic3d_StereoMode_ChessBoard       : aMode = "chessBoard";       break;
-        case Graphic3d_StereoMode_SideBySide       : aMode = "sideBySide";       break;
-        case Graphic3d_StereoMode_OverUnder        : aMode = "overUnder";        break;
-        case Graphic3d_StereoMode_SoftPageFlip     : aMode = "softpageflip";     break;
-        case Graphic3d_StereoMode_OpenVR           : aMode = "openVR";           break;
-        case Graphic3d_StereoMode_Anaglyph  :
+        case Graphic3d_StereoMode_QuadBuffer:
+        {
+          aMode = "quadBuffer";
+          break;
+        }
+        case Graphic3d_StereoMode_RowInterlaced:
+        {
+          aMode = "rowInterlaced";
+          if (aView->RenderingParams().ToSmoothInterlacing)
+          {
+            aMode.AssignCat (" (smoothed)");
+          }
+          break;
+        }
+        case Graphic3d_StereoMode_ColumnInterlaced:
+        {
+          aMode = "columnInterlaced";
+          if (aView->RenderingParams().ToSmoothInterlacing)
+          {
+            aMode.AssignCat (" (smoothed)");
+          }
+          break;
+        }
+        case Graphic3d_StereoMode_ChessBoard:
+        {
+          aMode = "chessBoard";
+          if (aView->RenderingParams().ToSmoothInterlacing)
+          {
+            aMode.AssignCat (" (smoothed)");
+          }
+          break;
+        }
+        case Graphic3d_StereoMode_SideBySide:
+        {
+          aMode = "sideBySide";
+          break;
+        }
+        case Graphic3d_StereoMode_OverUnder:
+        {
+          aMode = "overUnder";
+          break;
+        }
+        case Graphic3d_StereoMode_SoftPageFlip:
+        {
+          aMode = "softPageFlip";
+          break;
+        }
+        case Graphic3d_StereoMode_OpenVR:
+        {
+          aMode = "openVR";
+          break;
+        }
+        case Graphic3d_StereoMode_Anaglyph:
+        {
           aMode = "anaglyph";
           switch (aView->RenderingParams().AnaglyphFilter)
           {
@@ -9973,9 +9532,9 @@ static int VStereo (Draw_Interpretor& theDI,
             case Graphic3d_RenderingParams::Anaglyph_YellowBlue_Simple   : aMode.AssignCat (" (yellowBlueSimple)");   break;
             case Graphic3d_RenderingParams::Anaglyph_YellowBlue_Optimized: aMode.AssignCat (" (yellowBlue)");         break;
             case Graphic3d_RenderingParams::Anaglyph_GreenMagenta_Simple : aMode.AssignCat (" (greenMagentaSimple)"); break;
-            default: break;
+            case Graphic3d_RenderingParams::Anaglyph_UserDefined         : aMode.AssignCat (" (userDefined)");        break;
           }
-        default: break;
+        }
       }
       theDI << "Mode " << aMode << "\n";
     }
@@ -10024,27 +9583,12 @@ static int VStereo (Draw_Interpretor& theDI,
       }
     }
     else if (aFlag == "-reverse"
+          || aFlag == "-noreverse"
           || aFlag == "-reversed"
-          || aFlag == "-swap")
-    {
-      Standard_Boolean toEnable = Standard_True;
-      if (++anArgIter < theArgNb
-      && !Draw::ParseOnOff (theArgVec[anArgIter], toEnable))
-      {
-        --anArgIter;
-      }
-      aParams->ToReverseStereo = toEnable;
-    }
-    else if (aFlag == "-noreverse"
+          || aFlag == "-swap"
           || aFlag == "-noswap")
     {
-      Standard_Boolean toDisable = Standard_True;
-      if (++anArgIter < theArgNb
-      && !Draw::ParseOnOff (theArgVec[anArgIter], toDisable))
-      {
-        --anArgIter;
-      }
-      aParams->ToReverseStereo = !toDisable;
+      aParams->ToReverseStereo = Draw::ParseOnOffNoIterator (theArgNb, theArgVec, anArgIter);
     }
     else if (aFlag == "-mode"
           || aFlag == "-stereomode")
@@ -10096,13 +9640,14 @@ static int VStereo (Draw_Interpretor& theDI,
     else if (aFlag == "-mirror"
           || aFlag == "-mirrorcomposer")
     {
-      Standard_Boolean toEnable = Standard_True;
-      if (++anArgIter < theArgNb
-      && !Draw::ParseOnOff (theArgVec[anArgIter], toEnable))
-      {
-        --anArgIter;
-      }
-      aParams->ToMirrorComposer = toEnable;
+      aParams->ToMirrorComposer = Draw::ParseOnOffNoIterator (theArgNb, theArgVec, anArgIter);;
+    }
+    else if (aFlag == "-smooth"
+          || aFlag == "-nosmooth"
+          || aFlag == "-smoothinterlacing"
+          || aFlag == "-nosmoothinterlacing")
+    {
+      aParams->ToSmoothInterlacing = Draw::ParseOnOffNoIterator (theArgNb, theArgVec, anArgIter);
     }
     else if (anArgIter + 1 < theArgNb
           && (aFlag == "-unitfactor"
@@ -10226,80 +9771,71 @@ static int VDefaults (Draw_Interpretor& theDi,
   return 0;
 }
 
-//! Auxiliary method
-inline void addLight (const Handle(V3d_Light)& theLightNew,
-                      const Graphic3d_ZLayerId theLayer,
-                      const Standard_Boolean   theIsGlobal)
+//! Parse light source type from string.
+static bool parseLightSourceType (const TCollection_AsciiString& theTypeName,
+                                  Graphic3d_TypeOfLightSource& theType)
 {
-  if (theLightNew.IsNull())
+  TCollection_AsciiString aType (theTypeName);
+  aType.LowerCase();
+  if (aType == "amb"
+   || aType == "ambient"
+   || aType == "amblight")
   {
-    return;
+    theType = Graphic3d_TypeOfLightSource_Ambient;
   }
-
-  Handle(V3d_Viewer) aViewer = ViewerTest::GetViewerFromContext();
-  if (theLayer == Graphic3d_ZLayerId_UNKNOWN)
+  else if (aType == "directional"
+        || aType == "dirlight")
   {
-    aViewer->AddLight (theLightNew);
-    if (theIsGlobal)
-    {
-      aViewer->SetLightOn (theLightNew);
-    }
-    else
-    {
-      ViewerTest::CurrentView()->SetLightOn (theLightNew);
-    }
+    theType = Graphic3d_TypeOfLightSource_Directional;
+  }
+  else if (aType == "spot"
+        || aType == "spotlight")
+  {
+    theType = Graphic3d_TypeOfLightSource_Spot;
+  }
+  else if (aType == "poslight"
+        || aType == "positional"
+        || aType == "point"
+        || aType == "pnt")
+  {
+    theType = Graphic3d_TypeOfLightSource_Positional;
   }
   else
   {
-    Graphic3d_ZLayerSettings aSettings = aViewer->ZLayerSettings (theLayer);
-    if (aSettings.Lights().IsNull())
-    {
-      aSettings.SetLights (new Graphic3d_LightSet());
-    }
-    aSettings.Lights()->Add (theLightNew);
-    aViewer->SetZLayerSettings (theLayer, aSettings);
+    return false;
   }
+  return true;
 }
 
-//! Auxiliary method
-inline Standard_Integer getLightId (const TCollection_AsciiString& theArgNext)
+//! Find existing light by name or index.
+static Handle(V3d_Light) findLightSource (const TCollection_AsciiString& theName)
 {
-  TCollection_AsciiString anArgNextCase (theArgNext);
-  anArgNextCase.UpperCase();
-  if (anArgNextCase.Length() > 5
-   && anArgNextCase.SubString (1, 5).IsEqual ("LIGHT"))
+  Handle(V3d_Light) aLight;
+  Standard_Integer aLightIndex = -1;
+  Draw::ParseInteger (theName.ToCString(), aLightIndex);
+  Standard_Integer aLightIt = 0;
+  Handle(V3d_View) aView = ViewerTest::CurrentView();
+  for (V3d_ListOfLightIterator aLightIter (aView->ActiveLightIterator()); aLightIter.More(); aLightIter.Next(), ++aLightIt)
   {
-    return theArgNext.SubString (6, theArgNext.Length()).IntegerValue();
-  }
-  else
-  {
-    return theArgNext.IntegerValue();
-  }
-}
-
-static Handle(AIS_LightSource) findLightPrs (const Handle(V3d_Light)& theLight,
-                                             const bool theToShowErrors = true)
-{
-  if (theLight.IsNull())
-  {
-    if (theToShowErrors)
+    if (aLightIndex != -1)
     {
-      Message::SendFail() << "Syntax error: no active light source to find presentation";
+      if (aLightIt == aLightIndex)
+      {
+        return aLightIter.Value();
+      }
     }
-    return Handle(AIS_LightSource)();
-  }
-
-  Handle(AIS_InteractiveObject) anObject;
-  GetMapOfAIS().Find2 (theLight->Name(), anObject);
-  Handle(AIS_LightSource) aLightSource = Handle(AIS_LightSource)::DownCast (anObject);
-  if (aLightSource.IsNull())
-  {
-    if (theToShowErrors)
+    else if (aLightIter.Value()->GetId() == theName
+          || aLightIter.Value()->Name()  == theName)
     {
-      Message::SendFail() << "Syntax error: could not find '" << theLight->Name() << "' AIS object";
+      if (!aLight.IsNull())
+      {
+        Message::SendWarning() << "Warning: ambiguous light name '" << theName << "'";
+        break;
+      }
+      aLight = aLightIter.Value();
     }
   }
-  return aLightSource;
+  return aLight;
 }
 
 //===============================================================================================
@@ -10312,6 +9848,7 @@ static int VLight (Draw_Interpretor& theDi,
 {
   Handle(V3d_View)   aView   = ViewerTest::CurrentView();
   Handle(V3d_Viewer) aViewer = ViewerTest::GetViewerFromContext();
+  const Handle(AIS_InteractiveContext)& aCtx = ViewerTest::GetAISContext();
   if (aView.IsNull()
    || aViewer.IsNull())
   {
@@ -10319,8 +9856,6 @@ static int VLight (Draw_Interpretor& theDi,
     return 1;
   }
 
-  Standard_Real anXYZ[3]   = {};
-  Standard_Real anAtten[2] = {};
   if (theArgsNb < 2)
   {
     // print lights info
@@ -10331,55 +9866,50 @@ static int VLight (Draw_Interpretor& theDi,
       const Quantity_Color aColor = aLight->Color();
       theDi << "Light #" << aLightId
             << (!aLight->Name().IsEmpty() ? (TCollection_AsciiString(" ") + aLight->Name()) : "")
-            << " [" << aLight->GetId() << "]" << "\n";
+            << " [" << aLight->GetId() << "] "
+            << (aLight->IsEnabled() ? "ON" : "OFF") << "\n";
       switch (aLight->Type())
       {
         case V3d_AMBIENT:
         {
-          theDi << "  Type:       Ambient\n";
-          theDi << "  Intensity:  " << aLight->Intensity() << "\n";
+          theDi << "  Type:       Ambient\n"
+                << "  Intensity:  " << aLight->Intensity() << "\n";
           break;
         }
         case V3d_DIRECTIONAL:
         {
-          theDi << "  Type:       Directional\n";
-          theDi << "  Intensity:  " << aLight->Intensity() << "\n";
-          theDi << "  Headlight:  " << (aLight->Headlight() ? "TRUE" : "FALSE") << "\n";
-          theDi << "  CastShadows:" << (aLight->ToCastShadows() ? "TRUE" : "FALSE") << "\n";
-          theDi << "  Smoothness: " << aLight->Smoothness() << "\n";
-          aLight->Direction (anXYZ[0], anXYZ[1], anXYZ[2]);
-          theDi << "  Direction:  " << anXYZ[0] << ", " << anXYZ[1] << ", " << anXYZ[2] << "\n";
+          theDi << "  Type:       Directional\n"
+                << "  Intensity:  " << aLight->Intensity() << "\n"
+                << "  Headlight:  " << (aLight->Headlight() ? "TRUE" : "FALSE") << "\n"
+                << "  CastShadows:" << (aLight->ToCastShadows() ? "TRUE" : "FALSE") << "\n"
+                << "  Smoothness: " << aLight->Smoothness() << "\n"
+                << "  Direction:  " << aLight->PackedDirection().x() << " " << aLight->PackedDirection().y() << " " << aLight->PackedDirection().z() << "\n";
           break;
         }
         case V3d_POSITIONAL:
         {
-          theDi << "  Type:       Positional\n";
-          theDi << "  Intensity:  " << aLight->Intensity() << "\n";
-          theDi << "  Headlight:  " << (aLight->Headlight() ? "TRUE" : "FALSE") << "\n";
-          theDi << "  CastShadows:" << (aLight->ToCastShadows() ? "TRUE" : "FALSE") << "\n";
-          theDi << "  Smoothness: " << aLight->Smoothness() << "\n";
-          aLight->Position  (anXYZ[0], anXYZ[1], anXYZ[2]);
-          theDi << "  Position:   " << anXYZ[0] << ", " << anXYZ[1] << ", " << anXYZ[2] << "\n";
-          aLight->Attenuation (anAtten[0], anAtten[1]);
-          theDi << "  Atten.:     " << anAtten[0] << " " << anAtten[1] << "\n";
-          theDi << "  Range:      " << aLight->Range() << "\n";
+          theDi << "  Type:       Positional\n"
+                << "  Intensity:  " << aLight->Intensity() << "\n"
+                << "  Headlight:  " << (aLight->Headlight() ? "TRUE" : "FALSE") << "\n"
+                << "  CastShadows:" << (aLight->ToCastShadows() ? "TRUE" : "FALSE") << "\n"
+                << "  Smoothness: " << aLight->Smoothness() << "\n"
+                << "  Position:   " << aLight->Position().X() << " " << aLight->Position().Y() << " " << aLight->Position().Z() << "\n"
+                << "  Atten.:     " << aLight->ConstAttenuation() << " " << aLight->LinearAttenuation() << "\n"
+                << "  Range:      " << aLight->Range() << "\n";
           break;
         }
         case V3d_SPOT:
         {
-          theDi << "  Type:       Spot\n";
-          theDi << "  Intensity:  " << aLight->Intensity() << "\n";
-          theDi << "  Headlight:  " << (aLight->Headlight() ? "TRUE" : "FALSE") << "\n";
-          theDi << "  CastShadows:" << (aLight->ToCastShadows() ? "TRUE" : "FALSE") << "\n";
-          aLight->Position  (anXYZ[0], anXYZ[1], anXYZ[2]);
-          theDi << "  Position:   " << anXYZ[0] << ", " << anXYZ[1] << ", " << anXYZ[2] << "\n";
-          aLight->Direction (anXYZ[0], anXYZ[1], anXYZ[2]);
-          theDi << "  Direction:  " << anXYZ[0] << ", " << anXYZ[1] << ", " << anXYZ[2] << "\n";
-          aLight->Attenuation (anAtten[0], anAtten[1]);
-          theDi << "  Atten.:     " << anAtten[0] << " " << anAtten[1] << "\n";
-          theDi << "  Angle:      " << (aLight->Angle() * 180.0 / M_PI) << "\n";
-          theDi << "  Exponent:   " << aLight->Concentration() << "\n";
-          theDi << "  Range:      " << aLight->Range() << "\n";
+          theDi << "  Type:       Spot\n"
+                << "  Intensity:  " << aLight->Intensity() << "\n"
+                << "  Headlight:  " << (aLight->Headlight() ? "TRUE" : "FALSE") << "\n"
+                << "  CastShadows:" << (aLight->ToCastShadows() ? "TRUE" : "FALSE") << "\n"
+                << "  Position:   " << aLight->Position().X() << " " << aLight->Position().Y() << " " << aLight->Position().Z() << "\n"
+                << "  Direction:  " << aLight->PackedDirection().x() << " " << aLight->PackedDirection().y() << " " << aLight->PackedDirection().z() << "\n"
+                << "  Atten.:     " << aLight->ConstAttenuation() << " " << aLight->LinearAttenuation() << "\n"
+                << "  Angle:      " << (aLight->Angle() * 180.0 / M_PI) << "\n"
+                << "  Exponent:   " << aLight->Concentration() << "\n"
+                << "  Range:      " << aLight->Range() << "\n";
           break;
         }
         default:
@@ -10388,110 +9918,115 @@ static int VLight (Draw_Interpretor& theDi,
           break;
         }
       }
-      theDi << "  Color:      " << aColor.Red() << ", " << aColor.Green() << ", " << aColor.Blue() << " [" << Quantity_Color::StringName (aColor.Name()) << "]\n";
+      theDi << "  Color:      " << aColor.Red() << " " << aColor.Green() << " " << aColor.Blue() << " [" << Quantity_Color::StringName (aColor.Name()) << "]\n";
     }
   }
 
-  Handle(V3d_Light) aLightNew, aLightOld;
+  Handle(V3d_Light) aLightOld, aLightNew;
   Graphic3d_ZLayerId aLayer = Graphic3d_ZLayerId_UNKNOWN;
-  Standard_Boolean  isGlobal = Standard_True;
-  Standard_Boolean  toCreate = Standard_False;
-  ViewerTest_AutoUpdater anUpdateTool (ViewerTest::GetAISContext(), aView);
+  bool isGlobal = true;
+  ViewerTest_AutoUpdater anUpdateTool (aCtx, aView);
+  Handle(AIS_LightSource) aLightPrs;
   for (Standard_Integer anArgIt = 1; anArgIt < theArgsNb; ++anArgIt)
   {
-    Handle(V3d_Light) aLightCurr = aLightNew.IsNull() ? aLightOld : aLightNew;
-
-    TCollection_AsciiString aName, aValue;
     const TCollection_AsciiString anArg (theArgVec[anArgIt]);
     TCollection_AsciiString anArgCase (anArg);
-    anArgCase.UpperCase();
+    anArgCase.LowerCase();
     if (anUpdateTool.parseRedrawMode (anArg))
     {
       continue;
     }
-
-    if (anArgCase.IsEqual ("NEW")
-     || anArgCase.IsEqual ("ADD")
-     || anArgCase.IsEqual ("CREATE")
-     || anArgCase.IsEqual ("-NEW")
-     || anArgCase.IsEqual ("-ADD")
-     || anArgCase.IsEqual ("-CREATE"))
+    else if (anArgCase == "-new"
+          || anArgCase == "-add"
+          || anArgCase == "-create"
+          || anArgCase == "-type"
+          || (anArgCase == "-reset"
+          && !aLightNew.IsNull())
+          || (anArgCase == "-defaults"
+          && !aLightNew.IsNull())
+          || anArgCase == "add"
+          || anArgCase == "new"
+          || anArgCase == "create")
     {
-      toCreate = Standard_True;
-    }
-    else if (anArgCase.IsEqual ("-LAYER")
-          || anArgCase.IsEqual ("-ZLAYER"))
-    {
-      if (++anArgIt >= theArgsNb)
+      Graphic3d_TypeOfLightSource aType = Graphic3d_TypeOfLightSource_Ambient;
+      if (anArgCase == "-reset")
       {
-        Message::SendFail() << "Syntax error at argument '" << anArg << "'";
+        aType = aLightNew->Type();
+      }
+      else if (anArgIt + 1 >= theArgsNb
+           || !parseLightSourceType (theArgVec[++anArgIt], aType))
+      {
+        theDi << "Syntax error at '" << theArgVec[anArgIt] << "'\n";
         return 1;
       }
 
-      TCollection_AsciiString aValStr (theArgVec[anArgIt]);
-      aValStr.LowerCase();
-      if (aValStr == "default"
-       || aValStr == "def")
+      TCollection_AsciiString aName;
+      if (!aLightNew.IsNull())
       {
-        aLayer = Graphic3d_ZLayerId_Default;
+        aName = aLightNew->Name();
       }
-      else if (aValStr == "top")
+      switch (aType)
       {
-        aLayer = Graphic3d_ZLayerId_Top;
+        case Graphic3d_TypeOfLightSource_Ambient:
+        {
+          aLightNew = new V3d_AmbientLight();
+          break;
+        }
+        case Graphic3d_TypeOfLightSource_Directional:
+        {
+          aLightNew = new V3d_DirectionalLight();
+          break;
+        }
+        case Graphic3d_TypeOfLightSource_Spot:
+        {
+          aLightNew = new V3d_SpotLight (gp_Pnt (0.0, 0.0, 0.0));
+          break;
+        }
+        case Graphic3d_TypeOfLightSource_Positional:
+        {
+          aLightNew = new V3d_PositionalLight (gp_Pnt (0.0, 0.0, 0.0));
+          break;
+        }
       }
-      else if (aValStr == "topmost")
+
+      if (anArgCase == "-type"
+      && !aLightOld.IsNull())
       {
-        aLayer = Graphic3d_ZLayerId_Topmost;
+        aLightNew->CopyFrom (aLightOld);
       }
-      else if (aValStr == "toposd"
-            || aValStr == "osd")
+      aLightNew->SetName (aName);
+    }
+    else if ((anArgCase == "-layer"
+           || anArgCase == "-zlayer")
+          && anArgIt + 1 < theArgsNb)
+    {
+      if (!ViewerTest::ParseZLayer (theArgVec[++anArgIt], aLayer)
+      ||  aLayer == Graphic3d_ZLayerId_UNKNOWN)
       {
-        aLayer = Graphic3d_ZLayerId_TopOSD;
-      }
-      else if (aValStr == "botosd"
-            || aValStr == "bottom")
-      {
-        aLayer = Graphic3d_ZLayerId_BotOSD;
-      }
-      else if (aValStr.IsIntegerValue())
-      {
-        aLayer = Draw::Atoi (theArgVec[anArgIt]);
-      }
-      else
-      {
-        Message::SendFail() << "Syntax error at argument '" << anArg << "'";
+        Message::SendFail() << "Error: wrong syntax at '" << theArgVec[anArgIt] << "'";
         return 1;
       }
     }
-    else if (anArgCase.IsEqual ("GLOB")
-          || anArgCase.IsEqual ("GLOBAL")
-          || anArgCase.IsEqual ("-GLOB")
-          || anArgCase.IsEqual ("-GLOBAL"))
+    else if (anArgCase == "-glob"
+          || anArgCase == "-global"
+          || anArgCase == "-loc"
+          || anArgCase == "-local")
     {
-      isGlobal = Standard_True;
+      isGlobal = anArgCase.StartsWith ("-glob");
     }
-    else if (anArgCase.IsEqual ("LOC")
-          || anArgCase.IsEqual ("LOCAL")
-          || anArgCase.IsEqual ("-LOC")
-          || anArgCase.IsEqual ("-LOCAL"))
+    else if (anArgCase == "-def"
+          || anArgCase == "-defaults"
+          || anArgCase == "-reset")
     {
-      isGlobal = Standard_False;
-    }
-    else if (anArgCase.IsEqual ("DEF")
-          || anArgCase.IsEqual ("DEFAULTS")
-          || anArgCase.IsEqual ("-DEF")
-          || anArgCase.IsEqual ("-DEFAULTS"))
-    {
-      toCreate = Standard_False;
       aViewer->SetDefaultLights();
+      aLightOld.Nullify();
+      aLightNew.Nullify();
+      aLightPrs.Nullify();
     }
-    else if (anArgCase.IsEqual ("CLR")
-          || anArgCase.IsEqual ("CLEAR")
-          || anArgCase.IsEqual ("-CLR")
-          || anArgCase.IsEqual ("-CLEAR"))
+    else if (anArgCase == "-clr"
+          || anArgCase == "-clear"
+          || anArgCase == "clear")
     {
-      toCreate = Standard_False;
-
       TColStd_SequenceOfInteger aLayers;
       aViewer->GetAllZLayers (aLayers);
       for (TColStd_SequenceOfInteger::Iterator aLayeriter (aLayers); aLayeriter.More(); aLayeriter.Next())
@@ -10511,551 +10046,497 @@ static int VLight (Draw_Interpretor& theDi,
 
       if (aLayer == Graphic3d_ZLayerId_UNKNOWN)
       {
-        ViewerTest_DoubleMapOfInteractiveAndName aMap = GetMapOfAIS();
+        ViewerTest_DoubleMapOfInteractiveAndName& aMap = GetMapOfAIS();
         for (V3d_ListOfLightIterator aLightIter (aView->ActiveLightIterator()); aLightIter.More();)
         {
           Handle(V3d_Light) aLight = aLightIter.Value();
-          if (Handle(AIS_LightSource) aLightSourceDel = findLightPrs (aLight, false))
+          Handle(AIS_InteractiveObject) aPrsObject;
+          GetMapOfAIS().Find2 (aLight->Name(), aPrsObject);
+          if (Handle(AIS_LightSource) aLightSourceDel = Handle(AIS_LightSource)::DownCast (aPrsObject))
           {
-            ViewerTest::GetAISContext()->Remove (aLightSourceDel, false);
-            GetMapOfAIS().UnBind2 (aLight->Name());
+            aCtx->Remove (aLightSourceDel, false);
+            aMap.UnBind1 (aLightSourceDel);
           }
           aViewer->DelLight (aLight);
           aLightIter = aView->ActiveLightIterator();
         }
       }
-    }
-    else if (anArgCase.IsEqual ("AMB")
-          || anArgCase.IsEqual ("AMBIENT")
-          || anArgCase.IsEqual ("AMBLIGHT"))
-    {
-      if (!toCreate)
-      {
-        Message::SendFail() << "Syntax error at argument '" << anArg << "'";
-        return 1;
-      }
 
-      addLight (aLightNew, aLayer, isGlobal);
-      toCreate  = Standard_False;
-      aLightNew = new V3d_AmbientLight();
-    }
-    else if (anArgCase.IsEqual ("DIRECTIONAL")
-          || anArgCase.IsEqual ("DIRLIGHT"))
-    {
-      if (!toCreate)
-      {
-        Message::SendFail() << "Syntax error at argument '" << anArg << "'";
-        return 1;
-      }
-
-      addLight (aLightNew, aLayer, isGlobal);
-      toCreate  = Standard_False;
-      aLightNew = new V3d_DirectionalLight();
-    }
-    else if (anArgCase.IsEqual ("SPOT")
-          || anArgCase.IsEqual ("SPOTLIGHT"))
-    {
-      if (!toCreate)
-      {
-        Message::SendFail() << "Syntax error at argument '" << anArg << "'";
-        return 1;
-      }
-
-      addLight (aLightNew, aLayer, isGlobal);
-      toCreate  = Standard_False;
-      aLightNew = new V3d_SpotLight (gp_Pnt (0.0, 0.0, 0.0));
-    }
-    else if (anArgCase.IsEqual ("POSLIGHT")
-          || anArgCase.IsEqual ("POSITIONAL"))
-    {
-      if (!toCreate)
-      {
-        Message::SendFail() << "Syntax error at argument '" << anArg << "'";
-        return 1;
-      }
-
-      addLight (aLightNew, aLayer, isGlobal);
-      toCreate  = Standard_False;
-      aLightNew = new V3d_PositionalLight (gp_Pnt (0.0, 0.0, 0.0));
-    }
-    else if (anArgCase.IsEqual ("CHANGE")
-          || anArgCase.IsEqual ("-CHANGE"))
-    {
-      if (++anArgIt >= theArgsNb)
-      {
-        Message::SendFail() << "Syntax error at argument '" << anArg << "'";
-        return 1;
-      }
-
-      addLight (aLightNew, aLayer, isGlobal);
+      aLightOld.Nullify();
       aLightNew.Nullify();
-      const Standard_Integer aLightId = getLightId (theArgVec[anArgIt]);
-      Standard_Integer aLightIt = 0;
-      for (V3d_ListOfLightIterator aLightIter (aView->ActiveLightIterator()); aLightIter.More(); aLightIter.Next(), ++aLightIt)
-      {
-        if (aLightIt == aLightId)
-        {
-          aLightOld = aLightIter.Value();
-          break;
-        }
-      }
-
-      if (aLightOld.IsNull())
-      {
-        Message::SendFail() << "Error: Light " << theArgVec[anArgIt] << " is undefined";
-        return 1;
-      }
+      aLightPrs.Nullify();
     }
-    else if (anArgCase == "-DISPLAY"
-          || anArgCase == "-DISP"
-          || anArgCase == "-PRESENTATION"
-          || anArgCase == "-PRS")
+    else if (!aLightNew.IsNull()
+          && (anArgCase == "-display"
+           || anArgCase == "-disp"
+           || anArgCase == "-presentation"
+           || anArgCase == "-prs"))
     {
-      if (aLightCurr.IsNull())
+      TCollection_AsciiString aLightName = aLightNew->Name();
+      if (anArgIt + 1 < theArgsNb
+       && theArgVec[anArgIt + 1][0] != '-')
       {
-        Message::SendFail() << "Syntax error at argument '" << anArg << "'";
-        return 1;
-      }
-
-      TCollection_AsciiString aLightName = aLightCurr->Name();
-      if (++anArgIt > theArgsNb
-       && aLightName.IsEmpty())
-      {
-        Message::SendFail() << "Syntax error at argument '" << anArg << "'";
-        return 1;
-      }
-      if (anArgIt < theArgsNb)
-      {
-        if (theArgVec[anArgIt][0] != '-')
+        // old syntax
+        aLightName = theArgVec[++anArgIt];
+        if (aLightNew->Name() != aLightName)
         {
-          aLightName = theArgVec[anArgIt];
-          aLightCurr->SetName (aLightName);
-        }
-        else
-        {
-          --anArgIt;
+          if (Handle(V3d_Light) anOtherLight = findLightSource (aLightName))
+          {
+            theDi << "Syntax error: light with name '" << aLightName << "' is already defined";
+            return 1;
+          }
+          aLightNew->SetName (aLightName);
         }
       }
       if (aLightName.IsEmpty())
       {
-        Message::SendFail() << "Syntax error at argument '" << anArg << "'";
+        Message::SendFail() << "Error: nameless light source cannot be displayed";
         return 1;
       }
-      ViewerTest::Display (aLightName, new AIS_LightSource (aLightCurr), false);
+      if (aLightPrs.IsNull())
+      {
+        aLightPrs = new AIS_LightSource (aLightNew);
+      }
+      theDi << aLightName << " ";
     }
-    else if (anArgCase == "DEL"
-          || anArgCase == "DELETE"
-          || anArgCase == "-DEL"
-          || anArgCase == "-DELETE"
-          || anArgCase == "-REMOVE")
+    else if (!aLightNew.IsNull()
+          && (anArgCase == "-disable"
+           || anArgCase == "-disabled"
+           || anArgCase == "-enable"
+           || anArgCase == "-enabled"))
     {
-      Handle(V3d_Light) aLightDel;
-      if (++anArgIt >= theArgsNb)
+      bool toEnable = Draw::ParseOnOffIterator (theArgsNb, theArgVec, anArgIt);
+      if (anArgCase == "-disable"
+       || anArgCase == "-disabled")
       {
-        Message::SendFail() << "Syntax error at argument '" << anArg << "'";
-        return 1;
+        toEnable = !toEnable;
       }
-
-      const TCollection_AsciiString anArgNext (theArgVec[anArgIt]);
-      const Standard_Integer aLightDelId = getLightId (theArgVec[anArgIt]);
-      Standard_Integer aLightIt = 0;
-      for (V3d_ListOfLightIterator aLightIter (aView->ActiveLightIterator()); aLightIter.More(); aLightIter.Next(), ++aLightIt)
-      {
-        aLightDel = aLightIter.Value();
-        if (aLightIt == aLightDelId)
-        {
-          break;
-        }
-      }
-      if (aLightDel.IsNull())
-      {
-        continue;
-      }
-
-      TColStd_SequenceOfInteger aLayers;
-      aViewer->GetAllZLayers (aLayers);
-      for (TColStd_SequenceOfInteger::Iterator aLayeriter (aLayers); aLayeriter.More(); aLayeriter.Next())
-      {
-        if (aLayeriter.Value() == aLayer
-         || aLayer == Graphic3d_ZLayerId_UNKNOWN)
-        {
-          Graphic3d_ZLayerSettings aSettings = aViewer->ZLayerSettings (aLayeriter.Value());
-          if (!aSettings.Lights().IsNull())
-          {
-            aSettings.Lights()->Remove (aLightDel);
-            if (aSettings.Lights()->IsEmpty())
-            {
-              aSettings.SetLights (Handle(Graphic3d_LightSet)());
-            }
-          }
-          aViewer->SetZLayerSettings (aLayeriter.Value(), aSettings);
-          if (aLayer != Graphic3d_ZLayerId_UNKNOWN)
-          {
-            break;
-          }
-        }
-      }
-
-      if (aLayer == Graphic3d_ZLayerId_UNKNOWN)
-      {
-        if (Handle(AIS_LightSource) aLightSourceDel = findLightPrs (aLightDel, false))
-        {
-          ViewerTest::GetAISContext()->Remove (aLightSourceDel, false);
-          GetMapOfAIS().UnBind2 (aLightDel->Name());
-        }
-        aViewer->DelLight (aLightDel);
-      }
+      aLightNew->SetEnabled (toEnable);
     }
-    else if (anArgCase.IsEqual ("COLOR")
-          || anArgCase.IsEqual ("COLOUR")
-          || anArgCase.IsEqual ("-COLOR")
-          || anArgCase.IsEqual ("-COLOUR"))
+    else if (!aLightNew.IsNull()
+          && (anArgCase == "-color"
+           || anArgCase == "-colour"
+           || anArgCase == "color"))
     {
       Quantity_Color aColor;
       Standard_Integer aNbParsed = Draw::ParseColor (theArgsNb - anArgIt - 1,
                                                      theArgVec + anArgIt + 1,
                                                      aColor);
       anArgIt += aNbParsed;
-      if (aNbParsed == 0
-       || aLightCurr.IsNull())
+      if (aNbParsed == 0)
       {
         Message::SendFail() << "Syntax error at argument '" << anArg << "'";
         return 1;
       }
-      aLightCurr->SetColor (aColor);
+      aLightNew->SetColor (aColor);
     }
-    else if (anArgCase == "POS"
-          || anArgCase == "POSITION"
-          || anArgCase == "-POS"
-          || anArgCase == "-POSITION"
-          || anArgCase == "-PRSPOSITION"
-          || anArgCase == "-PRSPOS")
+    else if (!aLightNew.IsNull()
+          && (anArgCase == "-pos"
+           || anArgCase == "-position"
+           || anArgCase == "-prsposition"
+           || anArgCase == "-prspos"
+           || anArgCase == "pos"
+           || anArgCase == "position")
+          && (anArgIt + 3) < theArgsNb)
     {
       gp_XYZ aPosXYZ;
-      if ((anArgIt + 3) >= theArgsNb
-       || !parseXYZ (theArgVec + anArgIt + 1, aPosXYZ)
-       || aLightCurr.IsNull())
+      if (!parseXYZ (theArgVec + anArgIt + 1, aPosXYZ))
       {
         Message::SendFail() << "Syntax error at argument '" << anArg << "'";
         return 1;
       }
 
       anArgIt += 3;
-      if (anArgCase == "-PRSPOSITION"
-       || anArgCase == "-PRSPOS")
+      if (anArgCase == "-prsposition"
+       || anArgCase == "-prspos")
       {
-        aLightCurr->SetDisplayPosition (aPosXYZ);
+        aLightNew->SetDisplayPosition (aPosXYZ);
       }
       else
       {
-        if (aLightCurr->Type() != Graphic3d_TOLS_POSITIONAL
-         && aLightCurr->Type() != Graphic3d_TOLS_SPOT)
+        if (aLightNew->Type() != Graphic3d_TypeOfLightSource_Positional
+         && aLightNew->Type() != Graphic3d_TypeOfLightSource_Spot)
         {
           Message::SendFail() << "Syntax error at argument '" << anArg << "'";
           return 1;
         }
 
-        aLightCurr->SetPosition (aPosXYZ);
+        aLightNew->SetPosition (aPosXYZ);
       }
     }
-    else if (anArgCase.IsEqual ("DIR")
-          || anArgCase.IsEqual ("DIRECTION")
-          || anArgCase.IsEqual ("-DIR")
-          || anArgCase.IsEqual ("-DIRECTION"))
+    else if (!aLightNew.IsNull()
+          && (aLightNew->Type() == Graphic3d_TypeOfLightSource_Directional
+           || aLightNew->Type() == Graphic3d_TypeOfLightSource_Spot)
+          && (anArgCase == "-dir"
+           || anArgCase == "-direction")
+          && (anArgIt + 3) < theArgsNb)
     {
       gp_XYZ aDirXYZ;
-      if ((anArgIt + 3) >= theArgsNb
-       || !parseXYZ (theArgVec + anArgIt + 1, aDirXYZ)
-       || aLightCurr.IsNull()
-       || (aLightCurr->Type() != Graphic3d_TOLS_DIRECTIONAL
-        && aLightCurr->Type() != Graphic3d_TOLS_SPOT))
+      if (!parseXYZ (theArgVec + anArgIt + 1, aDirXYZ))
       {
         Message::SendFail() << "Syntax error at argument '" << anArg << "'";
         return 1;
       }
 
       anArgIt += 3;
-      aLightCurr->SetDirection (gp_Dir (aDirXYZ));
+      aLightNew->SetDirection (gp_Dir (aDirXYZ));
     }
-    else if (anArgCase.IsEqual ("SM")
-          || anArgCase.IsEqual ("SMOOTHNESS")
-          || anArgCase.IsEqual ("-SM")
-          || anArgCase.IsEqual ("-SMOOTHNESS"))
+    else if (!aLightNew.IsNull()
+          && (anArgCase == "-smoothangle"
+           || anArgCase == "-smoothradius"
+           || anArgCase == "-sm"
+           || anArgCase == "-smoothness")
+          && anArgIt + 1 < theArgsNb)
     {
-      if (++anArgIt >= theArgsNb
-       || aLightCurr.IsNull())
+      Standard_ShortReal aSmoothness = (Standard_ShortReal )Atof (theArgVec[++anArgIt]);
+      if (aLightNew->Type() == Graphic3d_TypeOfLightSource_Directional)
       {
-        Message::SendFail() << "Syntax error at argument '" << anArg << "'";
-        return 1;
+        aSmoothness = Standard_ShortReal(aSmoothness * M_PI / 180.0);
       }
-
-      Standard_ShortReal aSmoothness = (Standard_ShortReal )Atof (theArgVec[anArgIt]);
       if (Abs (aSmoothness) <= ShortRealEpsilon())
       {
-        aLightCurr->SetIntensity (1.f);
+        aLightNew->SetIntensity (1.f);
       }
-      else if (Abs (aLightCurr->Smoothness()) <= ShortRealEpsilon())
+      else if (Abs (aLightNew->Smoothness()) <= ShortRealEpsilon())
       {
-        aLightCurr->SetIntensity ((aSmoothness * aSmoothness) / 3.f);
+        aLightNew->SetIntensity ((aSmoothness * aSmoothness) / 3.f);
       }
       else
       {
-        Standard_ShortReal aSmoothnessRatio = static_cast<Standard_ShortReal> (aSmoothness / aLightCurr->Smoothness());
-        aLightCurr->SetIntensity (aLightCurr->Intensity() / (aSmoothnessRatio * aSmoothnessRatio));
+        Standard_ShortReal aSmoothnessRatio = static_cast<Standard_ShortReal> (aSmoothness / aLightNew->Smoothness());
+        aLightNew->SetIntensity (aLightNew->Intensity() / (aSmoothnessRatio * aSmoothnessRatio));
       }
 
-      if (aLightCurr->Type() == Graphic3d_TOLS_POSITIONAL)
+      if (aLightNew->Type() == Graphic3d_TypeOfLightSource_Positional)
       {
-        aLightCurr->SetSmoothRadius (aSmoothness);
+        aLightNew->SetSmoothRadius (aSmoothness);
       }
-      else if (aLightCurr->Type() == Graphic3d_TOLS_DIRECTIONAL)
+      else if (aLightNew->Type() == Graphic3d_TypeOfLightSource_Directional)
       {
-        aLightCurr->SetSmoothAngle (aSmoothness);
+        aLightNew->SetSmoothAngle (aSmoothness);
       }
     }
-    else if (anArgCase.IsEqual ("INT")
-          || anArgCase.IsEqual ("INTENSITY")
-          || anArgCase.IsEqual ("-INT")
-          || anArgCase.IsEqual ("-INTENSITY"))
+    else if (!aLightNew.IsNull()
+          && (anArgCase == "-int"
+           || anArgCase == "-intensity")
+          && anArgIt + 1 < theArgsNb)
     {
-      if (++anArgIt >= theArgsNb
-       || aLightCurr.IsNull())
-      {
-        Message::SendFail() << "Syntax error at argument '" << anArg << "'";
-        return 1;
-      }
-
-      Standard_ShortReal aIntensity = (Standard_ShortReal )Atof (theArgVec[anArgIt]);
-      aLightCurr->SetIntensity (aIntensity);
+      Standard_ShortReal aIntensity = (Standard_ShortReal )Atof (theArgVec[++anArgIt]);
+      aLightNew->SetIntensity (aIntensity);
     }
-    else if (anArgCase.IsEqual ("ANG")
-          || anArgCase.IsEqual ("ANGLE")
-          || anArgCase.IsEqual ("-ANG")
-          || anArgCase.IsEqual ("-ANGLE"))
+    else if (!aLightNew.IsNull()
+          &&  aLightNew->Type() == Graphic3d_TypeOfLightSource_Spot
+          && (anArgCase == "-spotangle"
+           || anArgCase == "-ang"
+           || anArgCase == "-angle")
+          && anArgIt + 1 < theArgsNb)
     {
-      if (++anArgIt >= theArgsNb
-       || aLightCurr.IsNull()
-       || aLightCurr->Type() != Graphic3d_TOLS_SPOT)
-      {
-        Message::SendFail() << "Syntax error at argument '" << anArg << "'";
-        return 1;
-      }
-      Standard_ShortReal anAngle = (Standard_ShortReal )Atof (theArgVec[anArgIt]);
+      Standard_ShortReal anAngle = (Standard_ShortReal )Atof (theArgVec[++anArgIt]);
       anAngle = (Standard_ShortReal (anAngle / 180.0 * M_PI));
-      aLightCurr->SetAngle (anAngle);
+      aLightNew->SetAngle (anAngle);
     }
-    else if (anArgCase.IsEqual ("CONSTATTEN")
-          || anArgCase.IsEqual ("CONSTATTENUATION")
-          || anArgCase.IsEqual ("-CONSTATTEN")
-          || anArgCase.IsEqual ("-CONSTATTENUATION"))
+    else if (!aLightNew.IsNull()
+          && (aLightNew->Type() == Graphic3d_TypeOfLightSource_Positional
+           || aLightNew->Type() == Graphic3d_TypeOfLightSource_Spot)
+          && (anArgCase == "-constatten"
+           || anArgCase == "-constattenuation")
+          && anArgIt + 1 < theArgsNb)
     {
-      if (++anArgIt >= theArgsNb
-       || aLightCurr.IsNull()
-       || (aLightCurr->Type() != Graphic3d_TOLS_POSITIONAL
-        && aLightCurr->Type() != Graphic3d_TOLS_SPOT))
-      {
-        Message::SendFail() << "Syntax error at argument '" << anArg << "'";
-        return 1;
-      }
-
-      aLightCurr->Attenuation (anAtten[0], anAtten[1]);
-      anAtten[0] = Atof (theArgVec[anArgIt]);
-      aLightCurr->SetAttenuation ((Standard_ShortReal )anAtten[0], (Standard_ShortReal )anAtten[1]);
+      const Standard_ShortReal aConstAtten = (Standard_ShortReal )Atof (theArgVec[++anArgIt]);
+      aLightNew->SetAttenuation (aConstAtten, aLightNew->LinearAttenuation());
     }
-    else if (anArgCase.IsEqual ("LINATTEN")
-          || anArgCase.IsEqual ("LINEARATTEN")
-          || anArgCase.IsEqual ("LINEARATTENUATION")
-          || anArgCase.IsEqual ("-LINATTEN")
-          || anArgCase.IsEqual ("-LINEARATTEN")
-          || anArgCase.IsEqual ("-LINEARATTENUATION"))
+    else if (!aLightNew.IsNull()
+          && (aLightNew->Type() == Graphic3d_TypeOfLightSource_Positional
+           || aLightNew->Type() == Graphic3d_TypeOfLightSource_Spot)
+          && (anArgCase == "-linatten"
+           || anArgCase == "-linearatten"
+           || anArgCase == "-linearattenuation")
+          && anArgIt + 1 < theArgsNb)
     {
-      if (++anArgIt >= theArgsNb
-       || aLightCurr.IsNull()
-       || (aLightCurr->Type() != Graphic3d_TOLS_POSITIONAL
-        && aLightCurr->Type() != Graphic3d_TOLS_SPOT))
-      {
-        Message::SendFail() << "Syntax error at argument '" << anArg << "'";
-        return 1;
-      }
-
-      aLightCurr->Attenuation (anAtten[0], anAtten[1]);
-      anAtten[1] = Atof (theArgVec[anArgIt]);
-      aLightCurr->SetAttenuation ((Standard_ShortReal )anAtten[0], (Standard_ShortReal )anAtten[1]);
+      const Standard_ShortReal aLinAtten = (Standard_ShortReal )Atof (theArgVec[++anArgIt]);
+      aLightNew->SetAttenuation (aLightNew->ConstAttenuation(), aLinAtten);
     }
-    else if (anArgCase.IsEqual ("EXP")
-          || anArgCase.IsEqual ("EXPONENT")
-          || anArgCase.IsEqual ("SPOTEXP")
-          || anArgCase.IsEqual ("SPOTEXPONENT")
-          || anArgCase.IsEqual ("-EXP")
-          || anArgCase.IsEqual ("-EXPONENT")
-          || anArgCase.IsEqual ("-SPOTEXP")
-          || anArgCase.IsEqual ("-SPOTEXPONENT"))
+    else if (!aLightNew.IsNull()
+          && aLightNew->Type() == Graphic3d_TypeOfLightSource_Spot
+          && (anArgCase == "-spotexp"
+           || anArgCase == "-spotexponent"
+           || anArgCase == "-exp"
+           || anArgCase == "-exponent")
+          && anArgIt + 1 < theArgsNb)
     {
-      if (++anArgIt >= theArgsNb
-       || aLightCurr.IsNull()
-       || aLightCurr->Type() != Graphic3d_TOLS_SPOT)
-      {
-        Message::SendFail() << "Syntax error at argument '" << anArg << "'";
-        return 1;
-      }
-
-      aLightCurr->SetConcentration ((Standard_ShortReal )Atof (theArgVec[anArgIt]));
+      aLightNew->SetConcentration ((Standard_ShortReal )Atof (theArgVec[++anArgIt]));
     }
-    else if (anArgCase.IsEqual("RANGE")
-          || anArgCase.IsEqual("-RANGE"))
+    else if (!aLightNew.IsNull()
+           && aLightNew->Type() != Graphic3d_TypeOfLightSource_Ambient
+           && aLightNew->Type() != Graphic3d_TypeOfLightSource_Directional
+           && anArgCase == "-range"
+           && anArgIt + 1 < theArgsNb)
     {
-      if (++anArgIt >= theArgsNb
-       || aLightCurr.IsNull()
-       || aLightCurr->Type() == Graphic3d_TOLS_AMBIENT
-       || aLightCurr->Type() == Graphic3d_TOLS_DIRECTIONAL)
-      {
-        Message::SendFail() << "Syntax error at argument '" << anArg << "'";
-        return 1;
-      }
-      Standard_ShortReal aRange ((Standard_ShortReal)Atof (theArgVec[anArgIt]));
-      aLightCurr->SetRange (aRange);
+      Standard_ShortReal aRange ((Standard_ShortReal)Atof (theArgVec[++anArgIt]));
+      aLightNew->SetRange (aRange);
     }
-    else if (anArgCase.IsEqual ("HEAD")
-          || anArgCase.IsEqual ("HEADLIGHT")
-          || anArgCase.IsEqual ("-HEAD")
-          || anArgCase.IsEqual ("-HEADLIGHT"))
+    else if (!aLightNew.IsNull()
+          && aLightNew->Type() != Graphic3d_TypeOfLightSource_Ambient
+          && (anArgCase == "-head"
+           || anArgCase == "-headlight"))
     {
-      if (aLightCurr.IsNull()
-       || aLightCurr->Type() == Graphic3d_TOLS_AMBIENT)
-      {
-        Message::SendFail() << "Syntax error at argument '" << anArg << "'";
-        return 1;
-      }
-
       Standard_Boolean isHeadLight = Standard_True;
       if (anArgIt + 1 < theArgsNb
        && Draw::ParseOnOff (theArgVec[anArgIt + 1], isHeadLight))
       {
         ++anArgIt;
       }
-      aLightCurr->SetHeadlight (isHeadLight);
+      aLightNew->SetHeadlight (isHeadLight);
     }
-    else if (anArgCase.IsEqual ("NAME")
-          || anArgCase.IsEqual ("-NAME"))
+    else if (!aLightNew.IsNull()
+           && anArgCase == "-name"
+           && anArgIt + 1 < theArgsNb)
     {
-      if ((anArgIt + 1) >= theArgsNb
-        || aLightCurr.IsNull())
+      const TCollection_AsciiString aName = theArgVec[++anArgIt];
+      if (aLightNew->Name() == aName)
       {
-        Message::SendFail() << "Syntax error at argument '" << anArg << "'";
-        return 1;
-      }
-      aName = theArgVec[++anArgIt];
-      aLightCurr->SetName (aName);
-    }
-    else if (anArgCase == "-SHOWZOOMABLE"
-          || anArgCase == "-PRSZOOMABLE"
-          || anArgCase == "-ZOOMABLE")
-    {
-      if (aLightCurr.IsNull())
-      {
-        Message::SendFail() << "Syntax error at argument '" << anArg << "'";
-        return 1;
+        continue;
       }
 
-      if (Handle(AIS_LightSource) aLightSource = findLightPrs (aLightCurr))
+      if (Handle(V3d_Light) anOtherLight = findLightSource (aName))
       {
-        const bool isZoomable = Draw::ParseOnOffIterator (theArgsNb, theArgVec, anArgIt);
-        aLightSource->SetZoomable (isZoomable);
-      }
-      else
-      {
+        theDi << "Syntax error: light with name '" << aName << "' is already defined";
         return 1;
       }
+      aLightNew->SetName (aName);
     }
-    else if (anArgCase == "-SHOWNAME"
-          || anArgCase == "-PRSNAME")
+    else if (!aLightPrs.IsNull()
+          && (anArgCase == "-showzoomable"
+           || anArgCase == "-prszoomable"
+           || anArgCase == "-zoomable"))
     {
-      if (aLightCurr.IsNull())
-      {
-        Message::SendFail() << "Syntax error at argument '" << anArg << "'";
-        return 1;
-      }
-
-      if (Handle(AIS_LightSource) aLightSource = findLightPrs (aLightCurr))
-      {
-        const bool toDisplay = Draw::ParseOnOffIterator (theArgsNb, theArgVec, anArgIt);
-        aLightSource->SetDisplayName (toDisplay);
-      }
-      else
-      {
-        return 1;
-      }
+      const bool isZoomable = Draw::ParseOnOffIterator (theArgsNb, theArgVec, anArgIt);
+      aLightPrs->SetZoomable (isZoomable);
     }
-    else if (anArgCase == "-SHOWRANGE"
-          || anArgCase == "-PRSRANGE")
+    else if (!aLightPrs.IsNull()
+         && (anArgCase == "-showdraggable"
+          || anArgCase == "-prsdraggable"
+          || anArgCase == "-draggable"))
     {
-      if (aLightCurr.IsNull()
-      || (aLightCurr->Type() != Graphic3d_TOLS_SPOT
-       && aLightCurr->Type() != Graphic3d_TOLS_POSITIONAL))
-      {
-        Message::SendFail() << "Syntax error at argument '" << anArg << "'";
-        return 1;
-      }
-
-      if (Handle(AIS_LightSource) aLightSource = findLightPrs (aLightCurr))
-      {
-        const bool toDisplay = Draw::ParseOnOffIterator (theArgsNb, theArgVec, anArgIt);
-        aLightSource->SetDisplayRange (toDisplay);
-      }
-      else
-      {
-        return 1;
-      }
+      const bool isDraggable = Draw::ParseOnOffIterator (theArgsNb, theArgVec, anArgIt);
+      aLightPrs->SetDraggable (isDraggable);
     }
-    else if (anArgCase == "-SHOWSIZE"
-          || anArgCase == "-PRSSIZE")
+    else if (!aLightPrs.IsNull()
+          && (anArgCase == "-showname"
+           || anArgCase == "-prsname"))
+    {
+      const bool toDisplay = Draw::ParseOnOffIterator (theArgsNb, theArgVec, anArgIt);
+      aLightPrs->SetDisplayName (toDisplay);
+    }
+    else if (!aLightPrs.IsNull()
+          && (aLightNew->Type() == Graphic3d_TypeOfLightSource_Spot
+           || aLightNew->Type() == Graphic3d_TypeOfLightSource_Positional)
+          && (anArgCase == "-showrange"
+           || anArgCase == "-prsrange"))
+    {
+      const bool toDisplay = Draw::ParseOnOffIterator (theArgsNb, theArgVec, anArgIt);
+      aLightPrs->SetDisplayRange (toDisplay);
+    }
+    else if (!aLightPrs.IsNull()
+          && (anArgCase == "-showsize"
+           || anArgCase == "-prssize")
+          && anArgIt + 1 < theArgsNb)
     {
       Standard_Real aSize = 0.0;
-      if ((anArgIt + 1) >= theArgsNb
-      || !Draw::ParseReal (theArgVec[anArgIt + 1], aSize)
-      ||  aSize <= 0.0)
+      if (!Draw::ParseReal (theArgVec[++anArgIt], aSize)
+       || aSize <= 0.0
+       || aLightPrs.IsNull())
       {
         Message::SendFail() << "Syntax error at argument '" << anArg << "'";
         return 1;
       }
 
-      ++anArgIt;
-      if (Handle(AIS_LightSource) aLightSource = findLightPrs (aLightCurr))
-      {
-        aLightSource->SetSize (aSize);
-      }
-      else
-      {
-        return 1;
-      }
+      aLightPrs->SetSize (aSize);
     }
-    else if (anArgCase.IsEqual ("-CASTSHADOW")
-          || anArgCase.IsEqual ("-CASTSHADOWS")
-          || anArgCase.IsEqual ("-SHADOWS"))
+    else if (!aLightPrs.IsNull()
+          && (anArgCase == "-dirarcsize"
+           || anArgCase == "-arcsize"
+           || anArgCase == "-arc")
+          && anArgIt + 1 < theArgsNb)
     {
-      if (aLightCurr.IsNull()
-       || aLightCurr->Type() == Graphic3d_TOLS_AMBIENT)
+      Standard_Integer aSize = 0;
+      if (!Draw::ParseInteger (theArgVec[anArgIt + 1], aSize)
+       || aSize <= 0
+       || aLightPrs->Light()->Type() != Graphic3d_TypeOfLightSource_Directional)
       {
         Message::SendFail() << "Syntax error at argument '" << anArg << "'";
         return 1;
       }
-
+      ++anArgIt;
+      aLightPrs->SetArcSize (aSize);
+    }
+    else if (!aLightNew.IsNull()
+          && aLightNew->Type() != Graphic3d_TypeOfLightSource_Ambient
+          && (anArgCase == "-castshadow"
+           || anArgCase == "-castshadows"
+           || anArgCase == "-shadows"))
+    {
       bool toCastShadows = true;
       if (anArgIt + 1 < theArgsNb
        && Draw::ParseOnOff (theArgVec[anArgIt + 1], toCastShadows))
       {
         ++anArgIt;
       }
-      aLightCurr->SetCastShadows (toCastShadows);
+      aLightNew->SetCastShadows (toCastShadows);
+    }
+    else if (anArgCase == "-del"
+          || anArgCase == "-delete"
+          || anArgCase == "-remove"
+          || anArgCase == "del"
+          || anArgCase == "delete"
+          || anArgCase == "remove")
+    {
+      if (aLightOld.IsNull())
+      {
+        if (!aLightNew.IsNull())
+        {
+          aLightNew.Nullify();
+          continue;
+        }
+
+        if (++anArgIt >= theArgsNb)
+        {
+          Message::SendFail() << "Syntax error at argument '" << anArg << "'";
+          return 1;
+        }
+
+        const TCollection_AsciiString anOldName (theArgVec[anArgIt]);
+        aLightOld = findLightSource (anOldName);
+        if (aLightOld.IsNull())
+        {
+          Message::SendWarning() << "Warning: light '" << anOldName << "' not found";
+          continue;
+        }
+      }
+
+      aLightNew.Nullify();
+      aLightPrs.Nullify();
+    }
+    else if (anArgCase == "-change"
+          || anArgCase == "change")
+    {
+      // just skip old syntax
+    }
+    else if (aLightNew.IsNull()
+         && !anArgCase.StartsWith ("-"))
+    {
+      if (!aLightNew.IsNull())
+      {
+        continue;
+      }
+
+      const TCollection_AsciiString anOldName (theArgVec[anArgIt]);
+      aLightOld = findLightSource (anOldName);
+      if (!aLightOld.IsNull())
+      {
+        aLightNew = aLightOld;
+
+        Handle(AIS_InteractiveObject) aPrsObject;
+        GetMapOfAIS().Find2 (aLightOld->Name(), aPrsObject);
+        aLightPrs = Handle(AIS_LightSource)::DownCast (aPrsObject);
+      }
+      else
+      {
+        Standard_Integer aLightIndex = -1;
+        Draw::ParseInteger (anOldName.ToCString(), aLightIndex);
+        if (aLightIndex != -1)
+        {
+          Message::SendFail() << "Syntax error: light source with index '" << aLightIndex << "' is not found";
+          return 1;
+        }
+
+        aLightNew = new V3d_AmbientLight();
+        aLightNew->SetName (anOldName);
+      }
     }
     else
     {
       Message::SendFail() << "Warning: unknown argument '" << anArg << "'";
+      return 1;
     }
   }
 
-  addLight (aLightNew, aLayer, isGlobal);
+  // delete old light source
+  if (!aLightOld.IsNull()
+    && aLightOld != aLightNew)
+  {
+    TColStd_SequenceOfInteger aLayers;
+    aViewer->GetAllZLayers (aLayers);
+    for (TColStd_SequenceOfInteger::Iterator aLayerIter (aLayers); aLayerIter.More(); aLayerIter.Next())
+    {
+      if (aLayerIter.Value() == aLayer
+       || aLayer == Graphic3d_ZLayerId_UNKNOWN)
+      {
+        Graphic3d_ZLayerSettings aSettings = aViewer->ZLayerSettings (aLayerIter.Value());
+        if (!aSettings.Lights().IsNull())
+        {
+          aSettings.Lights()->Remove (aLightOld);
+          if (aSettings.Lights()->IsEmpty())
+          {
+            aSettings.SetLights (Handle(Graphic3d_LightSet)());
+          }
+        }
+        aViewer->SetZLayerSettings (aLayerIter.Value(), aSettings);
+        if (aLayer != Graphic3d_ZLayerId_UNKNOWN)
+        {
+          break;
+        }
+      }
+    }
 
+    if (aLayer == Graphic3d_ZLayerId_UNKNOWN)
+    {
+      Handle(AIS_InteractiveObject) aPrsObject;
+      GetMapOfAIS().Find2 (aLightOld->Name(), aPrsObject);
+      if (Handle(AIS_LightSource) aLightSourceDel = Handle(AIS_LightSource)::DownCast (aPrsObject))
+      {
+        aCtx->Remove (aLightSourceDel, false);
+        GetMapOfAIS().UnBind1 (aLightSourceDel);
+      }
+      aViewer->DelLight (aLightOld);
+    }
+    aLightOld.Nullify();
+  }
+
+  // add new light source
+  if (!aLightNew.IsNull())
+  {
+    if (aLayer == Graphic3d_ZLayerId_UNKNOWN)
+    {
+      aViewer->AddLight (aLightNew);
+      if (isGlobal)
+      {
+        aViewer->SetLightOn (aLightNew);
+      }
+      else
+      {
+        aView->SetLightOn (aLightNew);
+      }
+    }
+    else
+    {
+      Graphic3d_ZLayerSettings aSettings = aViewer->ZLayerSettings (aLayer);
+      if (aSettings.Lights().IsNull())
+      {
+        aSettings.SetLights (new Graphic3d_LightSet());
+      }
+      aSettings.Lights()->Add (aLightNew);
+      aViewer->SetZLayerSettings (aLayer, aSettings);
+    }
+
+    if (!aLightPrs.IsNull())
+    {
+      aLightPrs->SetLight (aLightNew);
+      ViewerTest::Display (aLightNew->Name(), aLightPrs, false);
+    }
+  }
+
+  // manage presentations
   struct LightPrsSort
   {
     bool operator() (const Handle(AIS_LightSource)& theLeft,
@@ -11066,16 +10547,16 @@ static int VLight (Draw_Interpretor& theDi,
   };
 
   AIS_ListOfInteractive aPrsList;
-  ViewerTest::GetAISContext()->DisplayedObjects (AIS_KindOfInteractive_LightSource, -1, aPrsList);
+  aCtx->DisplayedObjects (AIS_KindOfInteractive_LightSource, -1, aPrsList);
   if (!aPrsList.IsEmpty())
   {
     // update light source presentations
     std::vector<Handle(AIS_LightSource)> aLightPrsVec;
     for (AIS_ListOfInteractive::Iterator aPrsIter (aPrsList); aPrsIter.More(); aPrsIter.Next())
     {
-      if (Handle(AIS_LightSource) aLightPrs = Handle(AIS_LightSource)::DownCast (aPrsIter.Value()))
+      if (Handle(AIS_LightSource) aLightPrs2 = Handle(AIS_LightSource)::DownCast (aPrsIter.Value()))
       {
-        aLightPrsVec.push_back (aLightPrs);
+        aLightPrsVec.push_back (aLightPrs2);
       }
     }
 
@@ -11085,16 +10566,16 @@ static int VLight (Draw_Interpretor& theDi,
     Standard_Integer aTopStack = 0;
     for (std::vector<Handle(AIS_LightSource)>::iterator aPrsIter = aLightPrsVec.begin(); aPrsIter != aLightPrsVec.end(); ++aPrsIter)
     {
-      Handle(AIS_LightSource) aLightPrs = *aPrsIter;
-      if (!aLightPrs->TransformPersistence().IsNull()
-        && aLightPrs->TransformPersistence()->IsTrihedronOr2d())
+      Handle(AIS_LightSource) aLightPrs2 = *aPrsIter;
+      if (!aLightPrs2->TransformPersistence().IsNull()
+        && aLightPrs2->TransformPersistence()->IsTrihedronOr2d())
       {
-        const Standard_Integer aPrsSize = (Standard_Integer )aLightPrs->Size();
-        aLightPrs->TransformPersistence()->SetOffset2d (Graphic3d_Vec2i (aTopStack + aPrsSize, aPrsSize));
+        const Standard_Integer aPrsSize = (Standard_Integer )aLightPrs2->Size();
+        aLightPrs2->TransformPersistence()->SetOffset2d (Graphic3d_Vec2i (aTopStack + aPrsSize, aPrsSize));
         aTopStack += aPrsSize + aPrsSize / 2;
       }
-      ViewerTest::GetAISContext()->Redisplay (aLightPrs, false);
-      ViewerTest::GetAISContext()->SetTransformPersistence (aLightPrs, aLightPrs->TransformPersistence());
+      aCtx->Redisplay (aLightPrs2, false);
+      aCtx->SetTransformPersistence (aLightPrs2, aLightPrs2->TransformPersistence());
     }
   }
   return 0;
@@ -11353,13 +10834,13 @@ static Standard_Integer VRenderParams (Draw_Interpretor& theDI,
     theDI << "shadingModel: ";
     switch (aView->ShadingModel())
     {
-      case Graphic3d_TOSM_DEFAULT:   theDI << "default";   break;
-      case Graphic3d_TOSM_UNLIT:     theDI << "unlit";     break;
-      case Graphic3d_TOSM_FACET:     theDI << "flat";      break;
-      case Graphic3d_TOSM_VERTEX:    theDI << "gouraud";   break;
-      case Graphic3d_TOSM_FRAGMENT:  theDI << "phong";     break;
-      case Graphic3d_TOSM_PBR:       theDI << "pbr";       break;
-      case Graphic3d_TOSM_PBR_FACET: theDI << "pbr_facet"; break;
+      case Graphic3d_TypeOfShadingModel_DEFAULT:    theDI << "default";   break;
+      case Graphic3d_TypeOfShadingModel_Unlit:      theDI << "unlit";     break;
+      case Graphic3d_TypeOfShadingModel_PhongFacet: theDI << "flat";      break;
+      case Graphic3d_TypeOfShadingModel_Gouraud:    theDI << "gouraud";   break;
+      case Graphic3d_TypeOfShadingModel_Phong:      theDI << "phong";     break;
+      case Graphic3d_TypeOfShadingModel_Pbr:        theDI << "pbr";       break;
+      case Graphic3d_TypeOfShadingModel_PbrFacet:   theDI << "pbr_facet"; break;
     }
     theDI << "\n";
     {
@@ -12150,13 +11631,13 @@ static Standard_Integer VRenderParams (Draw_Interpretor& theDI,
       {
         switch (aView->ShadingModel())
         {
-          case Graphic3d_TOSM_DEFAULT:   theDI << "default";   break;
-          case Graphic3d_TOSM_UNLIT:     theDI << "unlit ";    break;
-          case Graphic3d_TOSM_FACET:     theDI << "flat ";     break;
-          case Graphic3d_TOSM_VERTEX:    theDI << "gouraud ";  break;
-          case Graphic3d_TOSM_FRAGMENT:  theDI << "phong ";    break;
-          case Graphic3d_TOSM_PBR:       theDI << "pbr";       break;
-          case Graphic3d_TOSM_PBR_FACET: theDI << "pbr_facet"; break;
+          case Graphic3d_TypeOfShadingModel_DEFAULT:    theDI << "default";   break;
+          case Graphic3d_TypeOfShadingModel_Unlit:      theDI << "unlit ";    break;
+          case Graphic3d_TypeOfShadingModel_PhongFacet: theDI << "flat ";     break;
+          case Graphic3d_TypeOfShadingModel_Gouraud:    theDI << "gouraud ";  break;
+          case Graphic3d_TypeOfShadingModel_Phong:      theDI << "phong ";    break;
+          case Graphic3d_TypeOfShadingModel_Pbr:        theDI << "pbr";       break;
+          case Graphic3d_TypeOfShadingModel_PbrFacet:   theDI << "pbr_facet"; break;
         }
         continue;
       }
@@ -12166,9 +11647,9 @@ static Standard_Integer VRenderParams (Draw_Interpretor& theDI,
         Message::SendFail() << "Syntax error at argument '" << anArg << "'";
       }
 
-      Graphic3d_TypeOfShadingModel aModel = Graphic3d_TOSM_DEFAULT;
+      Graphic3d_TypeOfShadingModel aModel = Graphic3d_TypeOfShadingModel_DEFAULT;
       if (ViewerTest::ParseShadingModel (theArgVec[anArgIter], aModel)
-       && aModel != Graphic3d_TOSM_DEFAULT)
+       && aModel != Graphic3d_TypeOfShadingModel_DEFAULT)
       {
         aView->SetShadingModel (aModel);
       }
@@ -13765,6 +13246,11 @@ static int VDumpSelectionImage (Draw_Interpretor& /*theDi*/,
       {
         aType = StdSelect_TypeOfSelectionImage_ColoredEntity;
       }
+      else if (aValue == "entitytypecolor"
+            || aValue == "entitytype")
+      {
+        aType = StdSelect_TypeOfSelectionImage_ColoredEntityType;
+      }
       else if (aValue == "ownercolor"
             || aValue == "owner")
       {
@@ -14158,61 +13644,116 @@ static int VViewCube (Draw_Interpretor& ,
   return 0;
 }
 
+//! Parse color type argument.
+static bool parseColorType (const char* theString,
+                            Quantity_TypeOfColor& theType)
+{
+  TCollection_AsciiString aType (theString);
+  aType.LowerCase();
+  if      (aType == "rgb")  { theType = Quantity_TOC_RGB; }
+  else if (aType == "srgb") { theType = Quantity_TOC_sRGB; }
+  else if (aType == "hex")  { theType = Quantity_TOC_sRGB; }
+  else if (aType == "name") { theType = Quantity_TOC_sRGB; }
+  else if (aType == "hls")  { theType = Quantity_TOC_HLS; }
+  else if (aType == "lab")  { theType = Quantity_TOC_CIELab; }
+  else if (aType == "lch")  { theType = Quantity_TOC_CIELch; }
+  else { return false; }
+  return true;
+}
+
 //===============================================================================================
 //function : VColorConvert
 //purpose  :
 //===============================================================================================
-static int VColorConvert (Draw_Interpretor& theDI, Standard_Integer  theNbArgs, const char** theArgVec)
+static int VColorConvert (Draw_Interpretor& theDI, Standard_Integer theNbArgs, const char** theArgVec)
 {
-  if (theNbArgs != 6)
+  Quantity_TypeOfColor aTypeFrom = Quantity_TOC_RGB, aTypeTo = Quantity_TOC_RGB;
+  double anInput[4] = {};
+  Quantity_ColorRGBA aColor (0.0f, 0.0f, 0.0f, 1.0f);
+  bool toPrintHex = false, toPrintName = false, hasAlpha = false;
+  for (int anArgIter = 1; anArgIter < theNbArgs; ++anArgIter)
   {
-    std::cerr << "Error: command syntax is incorrect, see help" << std::endl;
-    return 1;
+    TCollection_AsciiString anArgCase (theArgVec[anArgIter]);
+    anArgCase.LowerCase();
+    if ((anArgCase == "-from"
+      || anArgCase == "from")
+     && anArgIter + 1 < theNbArgs
+     && parseColorType (theArgVec[anArgIter + 1], aTypeFrom))
+    {
+      ++anArgIter;
+    }
+    else if ((anArgCase == "-to"
+           || anArgCase == "to")
+          && anArgIter + 1 < theNbArgs
+          && parseColorType (theArgVec[anArgIter + 1], aTypeTo))
+    {
+      TCollection_AsciiString aToStr (theArgVec[++anArgIter]);
+      aToStr.LowerCase();
+      toPrintHex  = (aToStr == "hex");
+      toPrintName = (aToStr == "name");
+    }
+    else if (Quantity_ColorRGBA::ColorFromHex (theArgVec[anArgIter], aColor))
+    {
+      hasAlpha = anArgCase.Length() >= 8;
+    }
+    else if (Quantity_Color::ColorFromName (theArgVec[anArgIter], aColor.ChangeRGB()))
+    {
+      //
+    }
+    else if (anArgIter + 2 < theNbArgs
+          && Draw::ParseReal (theArgVec[anArgIter + 0], anInput[0])
+          && Draw::ParseReal (theArgVec[anArgIter + 1], anInput[1])
+          && Draw::ParseReal (theArgVec[anArgIter + 2], anInput[2]))
+    {
+      if (anArgIter + 3 < theNbArgs
+       && Draw::ParseReal (theArgVec[anArgIter + 3], anInput[3]))
+      {
+        anArgIter += 1;
+        aColor.SetAlpha ((float )anInput[3]);
+        hasAlpha = true;
+      }
+      anArgIter += 2;
+      aColor.ChangeRGB().SetValues (anInput[0], anInput[1], anInput[2], aTypeFrom);
+    }
+    else
+    {
+      theDI << "Syntax error: unknown argument '" << theArgVec[anArgIter] << "'";
+      return 1;
+    }
   }
 
-  Standard_Boolean convertFrom = (! strcasecmp (theArgVec[1], "from"));
-  if (! convertFrom && strcasecmp (theArgVec[1], "to"))
+  if (toPrintHex)
   {
-    std::cerr << "Error: first argument must be either \"to\" or \"from\"" << std::endl;
-    return 1;
+    if (hasAlpha || aColor.Alpha() < 1.0f)
+    {
+      theDI << Quantity_ColorRGBA::ColorToHex (aColor);
+    }
+    else
+    {
+      theDI << Quantity_Color::ColorToHex (aColor.GetRGB());
+    }
   }
-
-  const char* aTypeStr = theArgVec[2];
-  Quantity_TypeOfColor aType = Quantity_TOC_RGB;
-  if (! strcasecmp (aTypeStr, "srgb"))
+  else if (toPrintName)
   {
-    aType = Quantity_TOC_sRGB;
-  }
-  else if (! strcasecmp (aTypeStr, "hls"))
-  {
-    aType = Quantity_TOC_HLS;
-  }
-  else if (! strcasecmp (aTypeStr, "lab"))
-  {
-    aType = Quantity_TOC_CIELab;
-  }
-  else if (! strcasecmp (aTypeStr, "lch"))
-  {
-    aType = Quantity_TOC_CIELch;
+    theDI << Quantity_Color::StringName (aColor.GetRGB().Name());
   }
   else
   {
-    std::cerr << "Error: unknown colorspace type: " << aTypeStr << std::endl;
-    return 1;
+    double anOutput[3] = {};
+    aColor.GetRGB().Values (anOutput[0], anOutput[1], anOutput[2], aTypeTo);
+
+    // print values with 6 decimal digits
+    char aBuffer[1024];
+    if (hasAlpha || aColor.Alpha() < 1.0f)
+    {
+      Sprintf (aBuffer, "%.6f %.6f %.6f %.6f", anOutput[0], anOutput[1], anOutput[2], aColor.Alpha());
+    }
+    else
+    {
+      Sprintf (aBuffer, "%.6f %.6f %.6f", anOutput[0], anOutput[1], anOutput[2]);
+    }
+    theDI << aBuffer;
   }
-
-  double aC1 = Draw::Atof (theArgVec[3]);
-  double aC2 = Draw::Atof (theArgVec[4]);
-  double aC3 = Draw::Atof (theArgVec[5]);
-
-  Quantity_Color aColor (aC1, aC2, aC3, convertFrom ? aType : Quantity_TOC_RGB);
-  aColor.Values (aC1, aC2, aC3, convertFrom ? Quantity_TOC_RGB : aType);
-
-  // print values with 6 decimal digits
-  char buffer[1024];
-  Sprintf (buffer, "%.6f %.6f %.6f", aC1, aC2, aC3);
-  theDI << buffer;
-
   return 0;
 }
  
@@ -14357,896 +13898,977 @@ void ViewerTest::ViewerCommands(Draw_Interpretor& theCommands)
   // define destruction callback to destroy views in a well-defined order
   Tcl_CreateExitHandler (ViewerTest_ExitProc, 0);
 
-  const char *group = "ZeViewer";
-  theCommands.Add("vdriver",
-          "vdriver [-list] [-default DriverName] [-load DriverName]"
-    "\n\t\t: Manages active graphic driver factory."
-    "\n\t\t: Prints current active driver when called without arguments."
-    "\n\t\t: Makes specified driver active when ActiveName argument is specified."
-    "\n\t\t:  -list    print registered factories"
-    "\n\t\t:  -default define which factory should be used by default (to be used by next vinit call)"
-    "\n\t\t:  -load    try loading factory plugin and set it as default one",
-                  __FILE__, VDriver, group);
-  theCommands.Add("vinit",
-          "vinit [-name viewName] [-left leftPx] [-top topPx] [-width widthPx] [-height heightPx]"
-    "\n\t\t:     [-exitOnClose] [-closeOnEscape] [-cloneActive] [-virtual {on|off}=off] [-2d_mode {on|off}=off]"
-  #if defined(HAVE_XLIB)
-    "\n\t\t:     [-display displayName]"
-  #endif
-    "\n\t\t: Creates new View window with specified name viewName."
-    "\n\t\t: By default the new view is created in the viewer and in"
-    "\n\t\t: graphic driver shared with active view."
-    "\n\t\t:  -name {driverName/viewerName/viewName | viewerName/viewName | viewName}"
-    "\n\t\t: If driverName isn't specified the driver will be shared with active view."
-    "\n\t\t: If viewerName isn't specified the viewer will be shared with active view."
-#if defined(HAVE_XLIB)
-    "\n\t\t:  -display HostName.DisplayNumber[:ScreenNumber]"
-    "\n\t\t: Display name will be used within creation of graphic driver, when specified."
-#endif
-    "\n\t\t:  -left,  -top    pixel position of left top corner of the window."
-    "\n\t\t:  -width, -height width and height of window respectively."
-    "\n\t\t:  -cloneActive flag to copy camera and dimensions of active view."
-    "\n\t\t:  -exitOnClose when specified, closing the view will exit application."
-    "\n\t\t:  -closeOnEscape when specified, view will be closed on pressing Escape."
-    "\n\t\t:  -virtual create an offscreen window within interactive session"
-    "\n\t\t:  -2d_mode when on, view will not react on rotate scene events"
-    "\n\t\t: Additional commands for operations with views: vclose, vactivate, vviewlist.",
-    __FILE__,VInit,group);
-  theCommands.Add("vclose" ,
-    "[view_id [keep_context=0|1]]\n"
-    "or vclose ALL - to remove all created views\n"
-    " - removes view(viewer window) defined by its view_id.\n"
-    " - keep_context: by default 0; if 1 and the last view is deleted"
-    " the current context is not removed.",
-    __FILE__,VClose,group);
-  theCommands.Add("vactivate" ,
-    "vactivate view_id [-noUpdate]"
-    " - activates view(viewer window) defined by its view_id",
-    __FILE__,VActivate,group);
-  theCommands.Add("vviewlist",
-    "vviewlist [format={tree, long}]"
-    " - prints current list of views per viewer and graphic_driver ID shared between viewers"
-    " - format: format of result output, if tree the output is a tree view;"
-    "otherwise it's a list of full view names. By default format = tree",
-    __FILE__,VViewList,group);
-  theCommands.Add("vhelp" ,
-    "vhelp            : display help on the viewer commands",
-    __FILE__,VHelp,group);
-  theCommands.Add("vviewproj",
-          "vviewproj [top|bottom|left|right|front|back|axoLeft|axoRight]"
-    "\n\t\t:         [+-X+-Y+-Z] [-Zup|-Yup] [-frame +-X+-Y]"
-    "\n\t\t: Setup view direction"
-    "\n\t\t:   -Yup      use Y-up convention instead of Zup (which is default)."
-    "\n\t\t:   +-X+-Y+-Z define direction as combination of DX, DY and DZ;"
-    "\n\t\t:             for example '+Z' will show front of the model,"
-    "\n\t\t:             '-X-Y+Z' will define left axonometrical view."
-    "\n\t\t:   -frame    define camera Up and Right directions (regardless Up convention);"
-    "\n\t\t:             for example '+X+Z' will show front of the model with Z-up."
-    __FILE__,VViewProj,group);
-  theCommands.Add("vtop" ,
-    "vtop or <T>      : Top view. Orientation +X+Y" ,
-    __FILE__,VViewProj,group);
-  theCommands.Add("vbottom" ,
-    "vbottom          : Bottom view. Orientation +X-Y" ,
-    __FILE__,VViewProj,group);
-  theCommands.Add("vleft" ,
-    "vleft            : Left view. Orientation -Y+Z" ,
-    __FILE__,VViewProj,group);
-  theCommands.Add("vright" ,
-    "vright           : Right view. Orientation +Y+Z" ,
-    __FILE__,VViewProj,group);
-  theCommands.Add("vaxo" ,
-    " vaxo or <A>     : Axonometric view. Orientation +X-Y+Z",
-    __FILE__,VViewProj,group);
-  theCommands.Add("vfront" ,
-    "vfront           : Front view. Orientation +X+Z" ,
-    __FILE__,VViewProj,group);
-  theCommands.Add("vback" ,
-    "vback            : Back view. Orientation -X+Z" ,
-    __FILE__,VViewProj,group);
-  theCommands.Add("vpick" ,
-    "vpick           : vpick X Y Z [shape subshape] ( all variables as string )",
-    VPick,group);
-  theCommands.Add("vfit",
-    "vfit or <F> [-selected] [-noupdate]"
-    "\n\t\t: [-selected] fits the scene according to bounding box of currently selected objects",
-    __FILE__,VFit,group);
-  theCommands.Add ("vfitarea",
-    "vfitarea x1 y1 x2 y2"
-    "\n\t\t: vfitarea x1 y1 z1 x2 y2 z2"
-    "\n\t\t: Fit view to show area located between two points"
-    "\n\t\t: given in world 2D or 3D corrdinates.",
-    __FILE__, VFitArea, group);
-  theCommands.Add ("vzfit", "vzfit [scale]\n"
-    "   Matches Z near, Z far view volume planes to the displayed objects.\n"
-    "   \"scale\" - specifies factor to scale computed z range.\n",
-    __FILE__, VZFit, group);
-  theCommands.Add("vrepaint",
-            "vrepaint [-immediate] [-continuous FPS]"
-    "\n\t\t: force redraw of active View"
-    "\n\t\t:   -immediate  flag performs redraw of immediate layers only;"
-    "\n\t\t:   -continuous activates/deactivates continuous redraw of active View,"
-    "\n\t\t:                0 means no continuous rendering,"
-    "\n\t\t:               -1 means non-stop redraws,"
-    "\n\t\t:               >0 specifies target framerate,",
-    __FILE__,VRepaint,group);
-  theCommands.Add("vclear",
-    "vclear          : vclear"
-    "\n\t\t: remove all the object from the viewer",
-    __FILE__,VClear,group);
-  theCommands.Add (
-    "vbackground",
-    "Changes background or some background settings.\n"
-    "\n"
-    "Usage:\n"
-    "  vbackground -imageFile ImageFile [-imageMode FillType]\n"
-    "  vbackground -imageMode FillType\n"
-    "  vbackground -gradient Color1 Color2 [-gradientMode FillMethod]\n"
-    "  vbackground -gradientMode FillMethod\n"
-    "  vbackground -cubemap CubemapFile1 [CubeMapFiles2-5] [-order TilesIndexes1-6] [-invertedz]\n"
-    "  vbackground -color Color\n"
-    "  vbackground -default -gradient Color1 Color2 [-gradientMode FillType]\n"
-    "  vbackground -default -color Color\n"
-    "  vbackground -help\n"
-    "\n"
-    "Options:\n"
-    "  -imageFile    (-imgFile, -image, -img):             sets filename of image used as background\n"
-    "  -imageMode    (-imgMode, -imageMd, -imgMd):         sets image fill type\n"
-    "  -gradient     (-grad, -gr):                         sets background gradient starting and ending colors\n"
-    "  -gradientMode (-gradMode, -gradMd, -grMode, -grMd): sets gradient fill method\n"
-    "  -cubemap      (-cmap, -cm):                         sets environment cubemap as background\n"
-    "  -invertedz    (-invz, -iz):                         sets inversion of Z axis for background cubemap rendering\n"
-    "  -order        (-o):                                 defines order of tiles in one image cubemap\n"
-    "                                                      (has no effect in case of multi image cubemaps)\n"
-    "  -color        (-col):                               sets background color\n"
-    "  -default      (-def):                               sets background default gradient or color\n"
-    "  -help         (-h):                                 outputs short help message\n"
-    "\n"
-    "Arguments:\n"
-    "  Color:        Red Green Blue  - where Red, Green, Blue must be integers within the range [0, 255]\n"
-    "                                  or reals within the range [0.0, 1.0]\n"
-    "                ColorName       - one of WHITE, BLACK, RED, GREEN, BLUE, etc.\n"
-    "                #HHH, [#]HHHHHH - where H is a hexadecimal digit (0 .. 9, a .. f, or A .. F)\n"
-    "  FillMethod:   one of NONE, HOR[IZONTAL], VER[TICAL], DIAG[ONAL]1, DIAG[ONAL]2, CORNER1, CORNER2, CORNER3, "
-    "CORNER4\n"
-    "  FillType:     one of CENTERED, TILED, STRETCH, NONE\n"
-    "  ImageFile:    a name of the file with the image used as a background\n"
-    "  CubemapFilei: a name of the file with one image packed cubemap or names of separate files with every cubemap side\n"
-    "  TileIndexi:   a cubemap side index in range [0, 5] for i tile of one image packed cubemap\n",
-    __FILE__,
-    vbackground,
-    group);
-  theCommands.Add ("vsetbg",
-                   "Loads image as background."
-                   "\n\t\t: vsetbg ImageFile [FillType]"
-                   "\n\t\t: vsetbg -imageFile ImageFile [-imageMode FillType]"
-                   "\n\t\t: Alias for 'vbackground -imageFile ImageFile [-imageMode FillType]'.",
-                   __FILE__,
-                   vbackground,
-                   group);
-  theCommands.Add ("vsetbgmode",
-                   "Changes background image fill type."
-                   "\n\t\t: vsetbgmode [-imageMode] FillType"
-                   "\n\t\t: Alias for 'vbackground -imageMode FillType'.",
-                   __FILE__,
-                   vbackground,
-                   group);
-  theCommands.Add ("vsetgradientbg",
-                   "Mounts gradient background."
-                   "\n\t\t: vsetgradientbg Color1 Color2 [FillMethod]"
-                   "\n\t\t: vsetgradientbg -gradient Color1 Color2 [-gradientMode FillMethod]"
-                   "\n\t\t: Alias for 'vbackground -gradient Color1 Color2 -gradientMode FillMethod'.",
-                   __FILE__,
-                   vbackground,
-                   group);
-  theCommands.Add ("vsetgrbgmode",
-                   "Changes gradient background fill method."
-                   "\n\t\t: vsetgrbgmode [-gradientMode] FillMethod"
-                   "\n\t\t: Alias for 'vbackground -gradientMode FillMethod'.",
-                   __FILE__,
-                   vbackground,
-                   group);
-  theCommands.Add ("vsetcolorbg",
-                   "Sets background color."
-                   "\n\t\t: vsetcolorbg [-color] Color."
-                   "\n\t\t: Alias for 'vbackground -color Color'.",
-                   __FILE__,
-                   vbackground,
-                   group);
-  theCommands.Add ("vsetdefaultbg",
-                   "Sets default viewer background fill color (flat/gradient)."
-                   "\n\t\t: vsetdefaultbg Color1 Color2 [FillMethod]"
-                   "\n\t\t: vsetdefaultbg -gradient Color1 Color2 [-gradientMode FillMethod]"
-                   "\n\t\t: Alias for 'vbackground -default -gradient Color1 Color2 [-gradientMode FillMethod]'."
-                   "\n\t\t: vsetdefaultbg [-color] Color"
-                   "\n\t\t: Alias for 'vbackground -default -color Color'.",
-                   __FILE__,
-                   vbackground,
-                   group);
-  theCommands.Add("vscale",
-    "vscale          : vscale X Y Z",
-    __FILE__,VScale,group);
-  theCommands.Add("vzbufftrihedron",
-            "vzbufftrihedron [{-on|-off}=-on] [-type {wireframe|zbuffer}=zbuffer]"
-    "\n\t\t:       [-position center|left_lower|left_upper|right_lower|right_upper]"
-    "\n\t\t:       [-scale value=0.1] [-size value=0.8] [-arrowDiam value=0.05]"
-    "\n\t\t:       [-colorArrowX color=RED] [-colorArrowY color=GREEN] [-colorArrowZ color=BLUE]"
-    "\n\t\t:       [-nbfacets value=12] [-colorLabels color=WHITE]"
-    "\n\t\t:       [-colorLabelX color] [-colorLabelY color] [-colorLabelZ color]"
-    "\n\t\t: Displays a trihedron",
-    __FILE__,VZBuffTrihedron,group);
-  theCommands.Add("vrotate",
-    "vrotate [[-mouseStart X Y] [-mouseMove X Y]]|[AX AY AZ [X Y Z]]"
-    "\n                : Option -mouseStart starts rotation according to the mouse position"
-    "\n                : Option -mouseMove continues rotation with angle computed"
-    "\n                : from last and new mouse position."
-    "\n                : vrotate AX AY AZ [X Y Z]",
-    __FILE__,VRotate,group);
-  theCommands.Add("vzoom",
-    "vzoom           : vzoom coef",
-    __FILE__,VZoom,group);
-  theCommands.Add("vpan",
-    "vpan            : vpan dx dy",
-    __FILE__,VPan,group);
-  theCommands.Add("vcolorscale",
-    "vcolorscale name [-noupdate|-update] [-demo]"
-    "\n\t\t:       [-range RangeMin=0 RangeMax=1 NbIntervals=10]"
-    "\n\t\t:       [-font HeightFont=20]"
-    "\n\t\t:       [-logarithmic {on|off}=off] [-reversed {on|off}=off]"
-    "\n\t\t:       [-smoothTransition {on|off}=off]"
-    "\n\t\t:       [-hueRange MinAngle=230 MaxAngle=0]"
-    "\n\t\t:       [-colorRange MinColor=BLUE1 MaxColor=RED]"
-    "\n\t\t:       [-textpos {left|right|center|none}=right]"
-    "\n\t\t:       [-labelAtBorder {on|off}=on]"
-    "\n\t\t:       [-colors Color1 Color2 ...] [-color Index Color]"
-    "\n\t\t:       [-labels Label1 Label2 ...] [-label Index Label]"
-    "\n\t\t:       [-freeLabels NbOfLabels Label1 Label2 ...]"
-    "\n\t\t:       [-xy Left=0 Bottom=0]"
-    "\n\t\t:       [-uniform lightness hue_from hue_to]"
-    "\n\t\t:  -demo     - displays a color scale with demonstratio values"
-    "\n\t\t:  -colors   - set colors for all intervals"
-    "\n\t\t:  -color    - set color for specific interval"
-    "\n\t\t:  -uniform  - generate colors with the same lightness"
-    "\n\t\t:  -textpos  - horizontal label position relative to color scale bar"
-    "\n\t\t:  -labelAtBorder - vertical label position relative to color interval;"
-    "\n\t\t:              at border means the value inbetween neighbor intervals,"
-    "\n\t\t:              at center means the center value within current interval"
-    "\n\t\t:  -labels   - set labels for all intervals"
-    "\n\t\t:  -freeLabels - same as -labels but does not require"
-    "\n\t\t:              matching the number of intervals"
-    "\n\t\t:  -label    - set label for specific interval"
-    "\n\t\t:  -title    - set title"
-    "\n\t\t:  -reversed - setup smooth color transition between intervals"
-    "\n\t\t:  -smoothTransition - swap colorscale direction"
-    "\n\t\t:  -hueRange - set hue angles corresponding to minimum and maximum values",
-    __FILE__, VColorScale, group);
-  theCommands.Add("vgraduatedtrihedron",
-    "vgraduatedtrihedron : -on/-off [-xname Name] [-yname Name] [-zname Name] [-arrowlength Value]\n"
-    "\t[-namefont Name] [-valuesfont Name]\n"
-    "\t[-xdrawname on/off] [-ydrawname on/off] [-zdrawname on/off]\n"
-    "\t[-xnameoffset IntVal] [-ynameoffset IntVal] [-znameoffset IntVal]"
-    "\t[-xnamecolor Color] [-ynamecolor Color] [-znamecolor Color]\n"
-    "\t[-xdrawvalues on/off] [-ydrawvalues on/off] [-zdrawvalues on/off]\n"
-    "\t[-xvaluesoffset IntVal] [-yvaluesoffset IntVal] [-zvaluesoffset IntVal]"
-    "\t[-xcolor Color] [-ycolor Color] [-zcolor Color]\n"
-    "\t[-xdrawticks on/off] [-ydrawticks on/off] [-zdrawticks on/off]\n"
-    "\t[-xticks Number] [-yticks Number] [-zticks Number]\n"
-    "\t[-xticklength IntVal] [-yticklength IntVal] [-zticklength IntVal]\n"
-    "\t[-drawgrid on/off] [-drawaxes on/off]\n"
-    " - Displays or erases graduated trihedron"
-    " - xname, yname, zname - names of axes, default: X, Y, Z\n"
-    " - namefont - font of axes names. Default: Arial\n"
-    " - xnameoffset, ynameoffset, znameoffset - offset of name from values or tickmarks or axis. Default: 30\n"
-    " - xnamecolor, ynamecolor, znamecolor - colors of axes names\n"
-    " - xvaluesoffset, yvaluesoffset, zvaluesoffset - offset of values from tickmarks or axis. Default: 10\n"
-    " - valuesfont - font of axes values. Default: Arial\n"
-    " - xcolor, ycolor, zcolor - color of axis and values\n"
-    " - xticks, yticks, xzicks - number of tickmark on axes. Default: 5\n"
-    " - xticklength, yticklength, xzicklength - length of tickmark on axes. Default: 10\n",
-    __FILE__,VGraduatedTrihedron,group);
-  theCommands.Add("vtile" ,
-            "vtile [-totalSize W H] [-lowerLeft X Y] [-upperLeft X Y] [-tileSize W H]"
-    "\n\t\t: Setup view to draw a tile (a part of virtual bigger viewport)."
-    "\n\t\t:  -totalSize the size of virtual bigger viewport"
-    "\n\t\t:  -tileSize  tile size (the view size will be used if omitted)"
-    "\n\t\t:  -lowerLeft tile offset as lower left corner"
-    "\n\t\t:  -upperLeft tile offset as upper left corner",
-    __FILE__, VTile, group);
-  theCommands.Add("vzlayer",
-              "vzlayer [layerId]"
-      "\n\t\t:         [-add|-delete|-get|-settings] [-insertBefore AnotherLayer] [-insertAfter AnotherLayer]"
-      "\n\t\t:         [-origin X Y Z] [-cullDist Distance] [-cullSize Size]"
-      "\n\t\t:         [-enable|-disable {depthTest|depthWrite|depthClear|depthoffset}]"
-      "\n\t\t:         [-enable|-disable {positiveOffset|negativeOffset|textureenv|rayTracing}]"
-      "\n\t\t: ZLayer list management:"
-      "\n\t\t:   -add      add new z layer to viewer and print its id"
-      "\n\t\t:   -insertBefore add new z layer and insert it before existing one"
-      "\n\t\t:   -insertAfter  add new z layer and insert it after  existing one"
-      "\n\t\t:   -delete   delete z layer"
-      "\n\t\t:   -get      print sequence of z layers"
-      "\n\t\t:   -settings print status of z layer settings"
-      "\n\t\t:   -disable  disables given setting"
-      "\n\t\t:   -enable   enables  given setting",
-    __FILE__,VZLayer,group);
-  theCommands.Add("vlayerline",
-    "vlayerline : vlayerline x1 y1 x2 y2 [linewidth=0.5] [linetype=0] [transparency=1.0]",
-    __FILE__,VLayerLine,group);
-  theCommands.Add("vgrid",
-              "vgrid [off] [-type {rect|circ}] [-mode {line|point}] [-origin X Y] [-rotAngle Angle] [-zoffset DZ]"
-      "\n\t\t:       [-step X Y] [-size DX DY]"
-      "\n\t\t:       [-step StepRadius NbDivisions] [-radius Radius]",
-    __FILE__, VGrid, group);
-  theCommands.Add ("vpriviledgedplane",
-    "vpriviledgedplane [Ox Oy Oz Nx Ny Nz [Xx Xy Xz]]"
-    "\n\t\t:   Ox, Oy, Oz - plane origin"
-    "\n\t\t:   Nx, Ny, Nz - plane normal direction"
-    "\n\t\t:   Xx, Xy, Xz - plane x-reference axis direction"
-    "\n\t\t: Sets or prints viewer's priviledged plane geometry.",
-    __FILE__, VPriviledgedPlane, group);
-  theCommands.Add ("vconvert",
-    "vconvert v [Mode={window|view}]"
-    "\n\t\t: vconvert x y [Mode={window|view|grid|ray}]"
-    "\n\t\t: vconvert x y z [Mode={window|grid}]"
-    "\n\t\t:   window - convert to window coordinates, pixels"
-    "\n\t\t:   view   - convert to view projection plane"
-    "\n\t\t:   grid   - convert to model coordinates, given on grid"
-    "\n\t\t:   ray    - convert projection ray to model coordinates"
-    "\n\t\t: - vconvert v window : convert view to window;"
-    "\n\t\t: - vconvert v view   : convert window to view;"
-    "\n\t\t: - vconvert x y window : convert view to window;"
-    "\n\t\t: - vconvert x y view : convert window to view;"
-    "\n\t\t: - vconvert x y : convert window to model;"
-    "\n\t\t: - vconvert x y grid : convert window to model using grid;"
-    "\n\t\t: - vconvert x y ray : convert window projection line to model;"
-    "\n\t\t: - vconvert x y z window : convert model to window;"
-    "\n\t\t: - vconvert x y z grid : convert view to model using grid;"
-    "\n\t\t: Converts the given coordinates to window/view/model space.",
-    __FILE__, VConvert, group);
-  theCommands.Add ("vfps",
-    "vfps [framesNb=100] [-duration seconds] : estimate average frame rate for active view",
-    __FILE__, VFps, group);
-  theCommands.Add ("vstereo",
-            "vstereo [0|1] [-mode Mode] [-reverse {0|1}]"
-    "\n\t\t:         [-mirrorComposer] [-hmdfov2d AngleDegrees] [-unitFactor MetersFactor]"
-    "\n\t\t:         [-anaglyph Filter]"
-    "\n\t\t: Control stereo output mode."
-    "\n\t\t: When -mirrorComposer is specified, VR rendered frame will be mirrored in window (debug)."
-    "\n\t\t: Parameter -unitFactor specifies meters scale factor for mapping VR input."
-    "\n\t\t: Available modes for -mode:"
-    "\n\t\t:  quadBuffer        - OpenGL QuadBuffer stereo,"
-    "\n\t\t:                     requires driver support."
-    "\n\t\t:                     Should be called BEFORE vinit!"
-    "\n\t\t:  anaglyph         - Anaglyph glasses"
-    "\n\t\t:  rowInterlaced    - row-interlaced display"
-    "\n\t\t:  columnInterlaced - column-interlaced display"
-    "\n\t\t:  chessBoard       - chess-board output"
-    "\n\t\t:  sideBySide       - horizontal pair"
-    "\n\t\t:  overUnder        - vertical   pair"
-    "\n\t\t:  openVR           - OpenVR (HMD)"
-    "\n\t\t: Available Anaglyph filters for -anaglyph:"
-    "\n\t\t:  redCyan, redCyanSimple, yellowBlue, yellowBlueSimple,"
-    "\n\t\t:  greenMagentaSimple",
-    __FILE__, VStereo, group);
-  theCommands.Add ("vmemgpu",
-    "vmemgpu [f]: print system-dependent GPU memory information if available;"
-    " with f option returns free memory in bytes",
-    __FILE__, VMemGpu, group);
-  theCommands.Add ("vreadpixel",
-    "vreadpixel xPixel yPixel [{rgb|rgba|sRGB|sRGBa|depth|hls|rgbf|rgbaf}=rgba] [-name|-hex]"
-    " : Read pixel value for active view",
-    __FILE__, VReadPixel, group);
-  theCommands.Add("diffimage",
-            "diffimage imageFile1 imageFile2 [diffImageFile]"
-    "\n\t\t:           [-toleranceOfColor {0..1}=0] [-blackWhite {on|off}=off] [-borderFilter {on|off}=off]"
-    "\n\t\t:           [-display viewName prsName1 prsName2 prsNameDiff] [-exitOnClose] [-closeOnEscape]"
-    "\n\t\t: Compare two images by content and generate difference image."
-    "\n\t\t: When -exitOnClose is specified, closing the view will exit application."
-    "\n\t\t: When -closeOnEscape is specified, view will be closed on pressing Escape.",
-    __FILE__, VDiffImage, group);
-  theCommands.Add ("vselect",
-    "vselect x1 y1 [x2 y2 [x3 y3 ... xn yn]] [-allowoverlap 0|1] [-replace|-replaceextra|-xor|-add|-remove]\n"
-    "- emulates different types of selection:\n"
-    "- 1) single click selection\n"
-    "- 2) selection with rectangle having corners at pixel positions (x1,y1) and (x2,y2)\n"
-    "- 3) selection with polygon having corners in pixel positions (x1,y1), (x2,y2),...,(xn,yn)\n"
-    "- 4) -allowoverlap manages overlap and inclusion detection in rectangular and polygonal selection.\n"
-    "     If the flag is set to 1, both sensitives that were included completely and overlapped partially by defined \n"
-    "     rectangle or polygon will be detected, otherwise algorithm will chose only fully included sensitives.\n"
-    "     Default behavior is to detect only full inclusion. (partial inclusion - overlap - is not allowed by default)\n"
-    "- 5) selection scheme replace, replaceextra, xor, add or remove (replace by default)",
-    __FILE__, VSelect, group);
-  theCommands.Add ("vmoveto",
-    "vmoveto [x y] [-reset]"
-    "\n\t\t: Emulates cursor movement to pixel position (x,y)."
-    "\n\t\t:   -reset resets current highlighting",
-    __FILE__, VMoveTo, group);
-  theCommands.Add ("vselaxis",
-              "vselaxis x y z dx dy dz [-onlyTop 0|1] [-display Name] [-showNormal 0|1]"
-    "\n\t\t: Provides intersection by given axis and print result intersection points"
-    "\n\t\t:   -onlyTop       switches On/Off mode to find only top point or all"
-    "\n\t\t:   -display Name  displays intersecting axis and result intersection points for debug goals"
-    "\n\t\t:   -showNormal    adds displaying of normal in intersection point or not",
-    __FILE__, VSelectByAxis, group);
-  theCommands.Add ("vviewparams",
-              "vviewparams [-args] [-scale [s]]"
-      "\n\t\t:             [-eye [x y z]] [-at [x y z]] [-up [x y z]]"
-      "\n\t\t:             [-proj [x y z]] [-center x y] [-size sx]"
-      "\n\t\t: Manage current view parameters or prints all"
-      "\n\t\t: current values when called without argument."
-      "\n\t\t:   -scale [s]    prints or sets viewport relative scale"
-      "\n\t\t:   -eye  [x y z] prints or sets eye location"
-      "\n\t\t:   -at   [x y z] prints or sets center of look"
-      "\n\t\t:   -up   [x y z] prints or sets direction of up vector"
-      "\n\t\t:   -proj [x y z] prints or sets direction of look"
-      "\n\t\t:   -center x y   sets location of center of the screen in pixels"
-      "\n\t\t:   -size [sx]    prints viewport projection width and height sizes"
-      "\n\t\t:                 or changes the size of its maximum dimension"
-      "\n\t\t:   -args         prints vviewparams arguments for restoring current view",
-    __FILE__, VViewParams, group);
+  const char* aGroup = "AIS Viewer";
+  const char* aFileName = __FILE__;
+  auto addCmd = [&](const char* theName, Draw_Interpretor::CommandFunction theFunc, const char* theHelp)
+  {
+    theCommands.Add (theName, theHelp, aFileName, theFunc, aGroup);
+  };
 
-  theCommands.Add("v2dmode",
-    "v2dmode [-name viewName] [-mode {-on|-off}=-on]"
-    "\n\t\t:   name   - name of existing view, if not defined, the active view is changed"
-    "\n\t\t:   mode   - switches On/Off rotation mode"
-    "\n\t\t: Set 2D mode of the active viewer manipulating. The following mouse and key actions are disabled:"
-    "\n\t\t:   - rotation of the view by 3rd mouse button with Ctrl active"
-    "\n\t\t:   - set view projection using key buttons: A/D/T/B/L/R for AXO, Reset, Top, Bottom, Left, Right"
-    "\n\t\t: View camera position might be changed only by commands.",
-    __FILE__, V2DMode, group);
+  addCmd ("vdriver", VDriver, /* [vdriver] */ R"(
+vdriver [-list] [-default DriverName] [-load DriverName]
+Manages active graphic driver factory.
+Prints current active driver when called without arguments.
+Makes specified driver active when ActiveName argument is specified.
+ -list    print registered factories
+ -default define which factory should be used by default (to be used by next vinit call)
+ -load    try loading factory plugin and set it as default one
+)" /* [vdriver] */);
 
-  theCommands.Add("vanimation", "Alias for vanim",
-    __FILE__, VAnimation, group);
+  addCmd ("vinit", VInit, /* [vinit] */ R"(
+vinit [-name viewName] [-left leftPx] [-top topPx] [-width widthPx] [-height heightPx]
+      [-exitOnClose] [-closeOnEscape] [-cloneActive] [-virtual {0|1}]=0 [-2d_mode {0|1}]=0
+      [-display displayName] [-dpiAware {0|1}]=0
+      [-subview] [-parent OtherView] [-composer {0|1}]=0 [-margins DX DY]=0
+Creates new View window with specified name viewName.
+By default the new view is created in the viewer and in graphic driver shared with active view.
+ -name {driverName/viewerName/viewName | viewerName/viewName | viewName}
+       if driverName isn't specified the driver will be shared with active view;
+       if viewerName isn't specified the viewer will be shared with active view.
+ -display HostName.DisplayNumber[:ScreenNumber]
 
-  theCommands.Add("vanim",
-            "List existing animations:"
-    "\n\t\t:  vanim"
-    "\n\t\t: Animation playback:"
-    "\n\t\t:  vanim name -play|-resume [playFrom [playDuration]]"
-    "\n\t\t:            [-speed Coeff] [-freeLook] [-lockLoop]"
-    "\n\t\t:   -speed    playback speed (1.0 is normal speed)"
-    "\n\t\t:   -freeLook skip camera animations"
-    "\n\t\t:   -lockLoop disable any interactions"
-    "\n\t\t:"
-    "\n\t\t: Animation definition:"
-    "\n\t\t:  vanim Name/sub/name [-clear] [-delete]"
-    "\n\t\t:        [start TimeSec] [duration TimeSec]"
-    "\n\t\t:"
-    "\n\t\t: Animation name defined in path-style (anim/name or anim.name)"
-    "\n\t\t: specifies nested animations."
-    "\n\t\t: There is no syntax to explicitly add new animation,"
-    "\n\t\t: and all non-existing animations within the name will be"
-    "\n\t\t: implicitly created on first use (including parents)."
-    "\n\t\t:"
-    "\n\t\t: Each animation might define the SINGLE action (see below),"
-    "\n\t\t: like camera transition, object transformation or custom callback."
-    "\n\t\t: Child animations can be used for defining concurrent actions."
-    "\n\t\t:"
-    "\n\t\t: Camera animation:"
-    "\n\t\t:  vanim name -view [-eye1 X Y Z] [-eye2 X Y Z]"
-    "\n\t\t:                   [-at1  X Y Z] [-at2  X Y Z]"
-    "\n\t\t:                   [-up1  X Y Z] [-up2  X Y Z]"
-    "\n\t\t:                   [-scale1 Scale] [-scale2 Scale]"
-    "\n\t\t:   -eyeX   camera Eye positions pair (start and end)"
-    "\n\t\t:   -atX    camera Center positions pair"
-    "\n\t\t:   -upX    camera Up directions pair"
-    "\n\t\t:   -scaleX camera Scale factors pair"
-    "\n\t\t: Object animation:"
-    "\n\t\t:  vanim name -object [-loc1 X Y Z] [-loc2 X Y Z]"
-    "\n\t\t:                     [-rot1 QX QY QZ QW] [-rot2 QX QY QZ QW]"
-    "\n\t\t:                     [-scale1 Scale] [-scale2 Scale]"
-    "\n\t\t:   -locX   object Location points pair (translation)"
-    "\n\t\t:   -rotX   object Orientations pair (quaternions)"
-    "\n\t\t:   -scaleX object Scale factors pair (quaternions)"
-    "\n\t\t: Custom callback:"
-    "\n\t\t:  vanim name -invoke \"Command Arg1 Arg2 %Pts %LocalPts %Normalized ArgN\""
-    "\n\t\t:   %Pts        overall animation presentation timestamp"
-    "\n\t\t:   %LocalPts   local animation timestamp"
-    "\n\t\t:   %Normalized local animation normalized value in range 0..1"
-    "\n\t\t:"
-    "\n\t\t: Video recording:"
-    "\n\t\t:  vanim name -record FileName [Width Height] [-fps FrameRate=24]"
-    "\n\t\t:             [-format Format] [-vcodec Codec] [-pix_fmt PixelFormat]"
-    "\n\t\t:             [-crf Value] [-preset Preset]"
-    "\n\t\t:   -fps     video framerate"
-    "\n\t\t:   -format  file format, container (matroska, etc.)"
-    "\n\t\t:   -vcodec  video codec identifier (ffv1, mjpeg, etc.)"
-    "\n\t\t:   -pix_fmt image pixel format (yuv420p, rgb24, etc.)"
-    "\n\t\t:   -crf     constant rate factor (specific to codec)"
-    "\n\t\t:   -preset  codec parameters preset (specific to codec)"
-    __FILE__, VAnimation, group);
+Display name will be used within creation of graphic driver, when specified.
+ -left,  -top    pixel position of left top corner of the window.
+ -width, -height width and height of window respectively.
+ -cloneActive flag to copy camera and dimensions of active view.
+ -exitOnClose when specified, closing the view will exit application.
+ -closeOnEscape when specified, view will be closed on pressing Escape.
+ -virtual create an offscreen window within interactive session
+ -subview create a subview within another view
+ -2d_mode when on, view will not react on rotate scene events
+ -dpiAware override dpi aware hint (Windows platform)
+Additional commands for operations with views: vclose, vactivate, vviewlist.
+)" /* [vinit] */);
 
-  theCommands.Add("vchangeselected",
-    "vchangeselected shape"
-    "- adds to shape to selection or remove one from it",
-		__FILE__, VChangeSelected, group);
-  theCommands.Add ("vnbselected",
-    "vnbselected"
-    "\n\t\t: Returns number of selected objects", __FILE__, VNbSelected, group);
-  theCommands.Add ("vcamera",
-              "vcamera [PrsName] [-ortho] [-projtype]"
-      "\n\t\t:         [-persp]"
-      "\n\t\t:         [-fovy   [Angle]] [-distance [Distance]]"
-      "\n\t\t:         [-stereo] [-leftEye] [-rightEye]"
-      "\n\t\t:         [-iod [Distance]] [-iodType    [absolute|relative]]"
-      "\n\t\t:         [-zfocus [Value]] [-zfocusType [absolute|relative]]"
-      "\n\t\t:         [-fov2d  [Angle]] [-lockZup {0|1}]"
-      "\n\t\t:         [-xrPose base|head=base]"
-      "\n\t\t: Manages camera parameters."
-      "\n\t\t: Displays frustum when presentation name PrsName is specified."
-      "\n\t\t: Prints current value when option called without argument."
-      "\n\t\t: Orthographic camera:"
-      "\n\t\t:   -ortho      activate orthographic projection"
-      "\n\t\t: Perspective camera:"
-      "\n\t\t:   -persp      activate perspective  projection (mono)"
-      "\n\t\t:   -fovy       field of view in y axis, in degrees"
-      "\n\t\t:   -fov2d      field of view limit for 2d on-screen elements"
-      "\n\t\t:   -distance   distance of eye from camera center"
-      "\n\t\t:   -lockZup    lock Z up (tunrtable mode)"
-      "\n\t\t: Stereoscopic camera:"
-      "\n\t\t:   -stereo     perspective  projection (stereo)"
-      "\n\t\t:   -leftEye    perspective  projection (left  eye)"
-      "\n\t\t:   -rightEye   perspective  projection (right eye)"
-      "\n\t\t:   -iod        intraocular distance value"
-      "\n\t\t:   -iodType    distance type, absolute or relative"
-      "\n\t\t:   -zfocus     stereographic focus value"
-      "\n\t\t:   -zfocusType focus type, absolute or relative",
-    __FILE__, VCamera, group);
-  theCommands.Add ("vautozfit", "command to enable or disable automatic z-range adjusting\n"
-    "- vautozfit [on={1|0}] [scale]\n"
-    "    Prints or changes parameters of automatic z-fit mode:\n"
-    "   \"on\" - turns automatic z-fit on or off\n"
-    "   \"scale\" - specifies factor to scale computed z range.\n",
-    __FILE__, VAutoZFit, group);
-  theCommands.Add ("vzrange", "command to manually access znear and zfar values\n"
-    "   vzrange                - without parameters shows current values\n"
-    "   vzrange [znear] [zfar] - applies provided values to view",
-    __FILE__,VZRange, group);
-  theCommands.Add("vsetviewsize",
-    "vsetviewsize size",
-    __FILE__,VSetViewSize,group);
-  theCommands.Add("vmoveview",
-    "vmoveview Dx Dy Dz [Start = 1|0]",
-    __FILE__,VMoveView,group);
-  theCommands.Add("vtranslateview",
-    "vtranslateview Dx Dy Dz [Start = 1|0)]",
-    __FILE__,VTranslateView,group);
-  theCommands.Add("vturnview",
-    "vturnview Ax Ay Az [Start = 1|0]",
-    __FILE__,VTurnView,group);
-  theCommands.Add("vtextureenv",
-    "Enables or disables environment mapping in the 3D view, loading the texture from the given standard "
-    "or user-defined file and optionally applying texture mapping parameters\n"
-    "                  Usage:\n"
-    "                  vtextureenv off - disables environment mapping\n"
-    "                  vtextureenv on {std_texture|texture_file_name} [rep mod flt ss st ts tt rot] - enables environment mapping\n"
-    "                              std_texture = (0..7)\n"
-    "                              rep         = {clamp|repeat}\n"
-    "                              mod         = {decal|modulate}\n"
-    "                              flt         = {nearest|bilinear|trilinear}\n"
-    "                              ss, st      - scale factors for s and t texture coordinates\n"
-    "                              ts, tt      - translation for s and t texture coordinates\n"
-    "                              rot         - texture rotation angle in degrees",
-    __FILE__, VTextureEnv, group);
-  theCommands.Add("vhlr",
-            "vhlr {on|off} [-showHidden={1|0}] [-algoType={algo|polyAlgo}] [-noupdate]"
-      "\n\t\t: Hidden Line Removal algorithm."
-      "\n\t\t:   -showHidden if set ON, hidden lines are drawn as dotted ones"
-      "\n\t\t:   -algoType   type of HLR algorithm.\n",
-    __FILE__,VHLR,group);
-  theCommands.Add("vhlrtype",
-              "vhlrtype {algo|polyAlgo} [shape_1 ... shape_n] [-noupdate]"
-      "\n\t\t: Changes the type of HLR algorithm using for shapes:"
-      "\n\t\t:   'algo' - exact HLR algorithm is applied"
-      "\n\t\t:   'polyAlgo' - polygonal HLR algorithm is applied"
-      "\n\t\t: If shapes are not given - option is applied to all shapes in the view",
-    __FILE__,VHLRType,group);
-  theCommands.Add("vclipplane",
-              "vclipplane planeName [{0|1}]"
-      "\n\t\t:   [-equation1 A B C D]"
-      "\n\t\t:   [-equation2 A B C D]"
-      "\n\t\t:   [-boxInterior MinX MinY MinZ MaxX MaxY MaxZ]"
-      "\n\t\t:   [-set|-unset|-setOverrideGlobal [objects|views]]"
-      "\n\t\t:   [-maxPlanes]"
-      "\n\t\t:   [-capping {0|1}]"
-      "\n\t\t:     [-color R G B] [-transparency Value] [-hatch {on|off|ID}]"
-      "\n\t\t:     [-texName Texture] [-texScale SX SY] [-texOrigin TX TY]"
-      "\n\t\t:       [-texRotate Angle]"
-      "\n\t\t:     [-useObjMaterial {0|1}] [-useObjTexture {0|1}]"
-      "\n\t\t:       [-useObjShader {0|1}]"
-      "\n\t\t: Clipping planes management:"
-      "\n\t\t:   -maxPlanes   print plane limit for view"
-      "\n\t\t:   -delete      delete plane with given name"
-      "\n\t\t:   {off|on|0|1} turn clipping on/off"
-      "\n\t\t:   -set|-unset  set/unset plane for Object or View list;"
-      "\n\t\t:                applied to active View when list is omitted"
-      "\n\t\t:   -equation A B C D change plane equation"
-      "\n\t\t:   -clone SourcePlane NewPlane clone the plane definition."
-      "\n\t\t: Capping options:"
-      "\n\t\t:   -capping {off|on|0|1} turn capping on/off"
-      "\n\t\t:   -color R G B          set capping color"
-      "\n\t\t:   -transparency Value   set capping transparency 0..1"
-      "\n\t\t:   -texName Texture      set capping texture"
-      "\n\t\t:   -texScale SX SY       set capping tex scale"
-      "\n\t\t:   -texOrigin TX TY      set capping tex origin"
-      "\n\t\t:   -texRotate Angle      set capping tex rotation"
-      "\n\t\t:   -hatch {on|off|ID}    set capping hatching mask"
-      "\n\t\t:   -useObjMaterial {off|on|0|1} use material of clipped object"
-      "\n\t\t:   -useObjTexture  {off|on|0|1} use texture of clipped object"
-      "\n\t\t:   -useObjShader   {off|on|0|1} use shader program of object",
-      __FILE__, VClipPlane, group);
-  theCommands.Add("vdefaults",
-               "vdefaults [-absDefl value]"
-       "\n\t\t:           [-devCoeff value]"
-       "\n\t\t:           [-angDefl value]"
-       "\n\t\t:           [-autoTriang {off/on | 0/1}]"
-    , __FILE__, VDefaults, group);
-  theCommands.Add("vlight",
-    "tool to manage light sources, without arguments shows list of lights."
-    "\n    Main commands: "
-    "\n      '-clear' to clear lights"
-    "\n      '-{def}aults' to load default lights"
-    "\n      '-add' <type> to add any light source"
-    "\n          where <type> is one of {amb}ient|directional|{spot}light|positional"
-    "\n      'change' <lightId> to edit light source with specified lightId"
-    "\n\n      In addition to 'add' and 'change' commands you can use light parameters:"
-    "\n        -layer Id"
-    "\n        -{pos}ition X Y Z"
-    "\n        -{dir}ection X Y Z (for directional light or for spotlight)"
-    "\n        -color colorName"
-    "\n        -{head}light 0|1"
-    "\n        -castShadows 0|1"
-    "\n        -{sm}oothness value"
-    "\n        -{int}ensity value"
-    "\n        -{constAtten}uation value"
-    "\n        -{linearAtten}uation value"
-    "\n        -angle angleDeg"
-    "\n        -{spotexp}onent value"
-    "\n        -range value"
-    "\n        -local|-global"
-    "\n        -name value"
-    "\n        -display nameOfLight (display light source with specified nameOfLight or its name)"
-    "\n        -showName  {1|0} show/hide the name of light source; 1 by default"
-    "\n        -showRange {1|0} show/hide the range of spot/positional light source; 1 by default"
-    "\n        -prsZoomable {1|0} make light presentation zoomable/non-zoomable"
-    "\n        -prsSize {Value} set light presentation size"
-    "\n\n      example: vlight -add positional -head 1 -pos 0 1 1 -color red"
-    "\n        example: vlight -change 0 -direction 0 -1 0 -linearAttenuation 0.2",
-    __FILE__, VLight, group);
-  theCommands.Add("vpbrenv",
-    "vpbrenv -clear|-generate"
-    "\n\t\t: Clears or generates PBR environment map of active view."
-    "\n\t\t:  -clear clears PBR environment (fills by white color)"
-    "\n\t\t:  -generate generates PBR environment from current background cubemap",
-    __FILE__, VPBREnvironment, group);
-  theCommands.Add("vraytrace",
-            "vraytrace [0|1]"
-    "\n\t\t: Turns on/off ray-tracing renderer."
-    "\n\t\t:   'vraytrace 0' alias for 'vrenderparams -raster'."
-    "\n\t\t:   'vraytrace 1' alias for 'vrenderparams -rayTrace'.",
-    __FILE__, VRenderParams, group);
-  theCommands.Add("vrenderparams",
-    "\n\t\t: Manages rendering parameters, affecting visual appearance, quality and performance."
-    "\n\t\t: Should be applied taking into account GPU hardware capabilities and performance."
-    "\n\t\t: Common parameters:"
-    "\n\t\t: vrenderparams [-raster] [-shadingModel {unlit|facet|gouraud|phong|pbr|pbr_facet}=gouraud]"
-    "\n\t\t:               [-msaa 0..8=0] [-rendScale scale=1]"
-    "\n\t\t:               [-resolution value=72] [-fontHinting {off|normal|light}=off]"
-    "\n\t\t:               [-fontAutoHinting {auto|force|disallow}=auto]"
-    "\n\t\t:               [-oit {off|weight|peel}] [-oit weighted [depthFactor=0.0]] [-oit peeling [nbLayers=4]]"
-    "\n\t\t:               [-shadows {on|off}=on] [-shadowMapResolution value=1024] [-shadowMapBias value=0.005]"
-    "\n\t\t:               [-depthPrePass {on|off}=off] [-alphaToCoverage {on|off}=on]"
-    "\n\t\t:               [-frustumCulling {on|off|noupdate}=on] [-lineFeather width=1.0]"
-    "\n\t\t:               [-sync {default|views}] [-reset]"
-    "\n\t\t:   -raster          Disables GPU ray-tracing."
-    "\n\t\t:   -shadingModel    Controls shading model."
-    "\n\t\t:   -msaa            Specifies number of samples for MSAA."
-    "\n\t\t:   -rendScale       Rendering resolution scale factor (supersampling, alternative to MSAA)."
-    "\n\t\t:   -resolution      Sets new pixels density (PPI) used as text scaling factor."
-    "\n\t\t:   -fontHinting     Enables/disables font hinting for better readability on low-resolution screens."
-    "\n\t\t:   -fontAutoHinting Manages font autohinting."
-    "\n\t\t:   -lineFeather     Sets line feather factor while displaying mesh edges."
-    "\n\t\t:   -alphaToCoverage Enables/disables alpha to coverage (needs MSAA)."
-    "\n\t\t:   -oit             Enables/disables order-independent transparency (OIT) rendering;"
-    "\n\t\t:        off         unordered transparency (but opaque objects implicitly draw first);"
-    "\n\t\t:        weighted    weight OIT is managed by depth weight factor 0.0..1.0;"
-    "\n\t\t:        peeling     depth peeling OIT is managed by number of peeling layers."
-    "\n\t\t:   -shadows         Enables/disables shadows rendering."
-    "\n\t\t:   -shadowMapResolution Shadow texture map resolution."
-    "\n\t\t:   -shadowMapBias   Shadow map bias."
-    "\n\t\t:   -depthPrePass    Enables/disables depth pre-pass."
-    "\n\t\t:   -frustumCulling  Enables/disables objects frustum clipping or"
-    "\n\t\t:                    sets state to check structures culled previously."
-    "\n\t\t:   -sync            Sets active View parameters as Viewer defaults / to other Views."
-    "\n\t\t:   -reset           Resets active View parameters to Viewer defaults."
-    "\n\t\t: Diagnostic output (on-screen overlay):"
-    "\n\t\t: vrenderparams [-perfCounters none|fps|cpu|layers|structures|groups|arrays|triangles|points"
-    "\n\t\t:                             |gpuMem|frameTime|basic|extended|full|nofps|skipImmediate]"
-    "\n\t\t:               [-perfUpdateInterval nbSeconds=1] [-perfChart nbFrames=1] [-perfChartMax seconds=0.1]"
-    "\n\t\t:   -perfCounters       Show/hide performance counters (flags can be combined)."
-    "\n\t\t:   -perfUpdateInterval Performance counters update interval."
-    "\n\t\t:   -perfChart          Show frame timers chart limited by specified number of frames."
-    "\n\t\t:   -perfChartMax       Maximum time in seconds with the chart."
-    "\n\t\t: Ray-Tracing options:"
-    "\n\t\t: vrenderparams [-rayTrace] [-rayDepth {0..10}=3] [-reflections {on|off}=off]"
-    "\n\t\t:               [-fsaa {on|off}=off] [-gleam {on|off}=off] [-env {on|off}=off]"
-    "\n\t\t:               [-gi {on|off}=off] [-brng {on|off}=off]"
-    "\n\t\t:               [-iss {on|off}=off] [-tileSize {1..4096}=32] [-nbTiles {64..1024}=256]"
-    "\n\t\t:               [-ignoreNormalMap {on|off}=off] [-twoSide {on|off}=off]"
-    "\n\t\t:               [-maxRad {value>0}=30.0]"
-    "\n\t\t:               [-aperture {value>=0}=0.0] [-focal {value>=0.0}=1.0]"
-    "\n\t\t:               [-exposure value=0.0] [-whitePoint value=1.0] [-toneMapping {disabled|filmic}=disabled]"
-    "\n\t\t:   -rayTrace     Enables  GPU ray-tracing."
-    "\n\t\t:   -rayDepth     Defines maximum ray-tracing depth."
-    "\n\t\t:   -reflections  Enables/disables specular reflections."
-    "\n\t\t:   -fsaa         Enables/disables adaptive anti-aliasing."
-    "\n\t\t:   -gleam        Enables/disables transparency shadow effects."
-    "\n\t\t:   -gi           Enables/disables global illumination effects (Path-Tracing)."
-    "\n\t\t:   -env          Enables/disables environment map background."
-    "\n\t\t:   -ignoreNormalMap Enables/disables normal map ignoring during path tracing."
-    "\n\t\t:   -twoSide      Enables/disables two-sided BSDF models (PT mode)."
-    "\n\t\t:   -iss          Enables/disables adaptive screen sampling (PT mode)."
-    "\n\t\t:   -maxRad       Value used for clamping radiance estimation (PT mode)."
-    "\n\t\t:   -tileSize     Specifies   size of screen tiles in ISS mode (32 by default)."
-    "\n\t\t:   -nbTiles      Specifies number of screen tiles per Redraw in ISS mode (256 by default)."
-    "\n\t\t:   -aperture     Aperture size  of perspective camera for depth-of-field effect (0 disables DOF)."
-    "\n\t\t:   -focal        Focal distance of perspective camera for depth-of-field effect."
-    "\n\t\t:   -exposure     Exposure value for tone mapping (0.0 value disables the effect)."
-    "\n\t\t:   -whitePoint   White point value for filmic tone mapping."
-    "\n\t\t:   -toneMapping  Tone mapping mode (disabled, filmic)."
-    "\n\t\t: PBR environment baking parameters (advanced/debug):"
-    "\n\t\t: vrenderparams [-pbrEnvPow2size {power>0}=9] [-pbrEnvSMLN {levels>1}=6] [-pbrEnvBP {0..1}=0.99]"
-    "\n\t\t:               [-pbrEnvBDSN {samples>0}=1024] [-pbrEnvBSSN {samples>0}=256]"
-    "\n\t\t:   -pbrEnvPow2size Controls size of IBL maps (real size can be calculates as 2^pbrenvpow2size)."
-    "\n\t\t:   -pbrEnvSMLN     Controls number of mipmap levels used in specular IBL map."
-    "\n\t\t:   -pbrEnvBDSN     Controls number of samples in Monte-Carlo integration during"
-    "\n\t\t:                   diffuse IBL map's sherical harmonics calculation."
-    "\n\t\t:   -pbrEnvBSSN     Controls maximum number of samples per mipmap level"
-    "\n\t\t:                   in Monte-Carlo integration during specular IBL maps generation."
-    "\n\t\t:   -pbrEnvBP       Controls strength of samples number reducing"
-    "\n\t\t:                   during specular IBL maps generation (1 disables reducing)."
-    "\n\t\t: Debug options:"
-    "\n\t\t: vrenderparams [-issd {on|off}=off] [-rebuildGlsl on|off]"
-    "\n\t\t:   -issd         Shows screen sampling distribution in ISS mode."
-    "\n\t\t:   -rebuildGlsl  Rebuild Ray-Tracing GLSL programs (for debugging)."
-    "\n\t\t:   -brng         Enables/disables blocked RNG (fast coherent PT).",
-    __FILE__, VRenderParams, group);
-  theCommands.Add("vstatprofiler",
-    "\n vstatprofiler [fps|cpu|allLayers|layers|allstructures|structures|groups"
-    "\n                |allArrays|fillArrays|lineArrays|pointArrays|textArrays"
-    "\n                |triangles|points|geomMem|textureMem|frameMem"
-    "\n                |elapsedFrame|cpuFrameAverage|cpuPickingAverage|cpuCullingAverage|cpuDynAverage"
-    "\n                |cpuFrameMax|cpuPickingMax|cpuCullingMax|cpuDynMax]"
-    "\n                [-noredraw]"
-    "\n\t\t: Prints rendering statistics."
-    "\n\t\t:   If there are some parameters - print corresponding statistic counters values,"
-    "\n\t\t:   else - print all performance counters set previously."
-    "\n\t\t:   '-noredraw' Flag to avoid additional redraw call and use already collected values.\n",
-    __FILE__, VStatProfiler, group);
-  theCommands.Add ("vplace",
-            "vplace dx dy"
-    "\n\t\t: Places the point (in pixels) at the center of the window",
-    __FILE__, VPlace, group);
-  theCommands.Add("vxrotate",
-    "vxrotate",
-    __FILE__,VXRotate,group);
+  addCmd ("vclose", VClose, /* [vclose] */ R"(
+vclose [view_id [keep_context=0|1]]
+or vclose ALL - to remove all created views
+ - removes view(viewer window) defined by its view_id.
+ - keep_context: by default 0; if 1 and the last view is deleted the current context is not removed.
+)" /* [vclose] */);
 
-    theCommands.Add("vmanipulator",
-      "\n    vmanipulator Name [-attach AISObject | -detach | ...]"
-      "\n    tool to create and manage AIS manipulators."
-      "\n    Options: "
-      "\n      '-attach AISObject'                 attach manipulator to AISObject"
-      "\n      '-adjustPosition {0|center|location|shapeLocation}' adjust position when attaching"
-      "\n      '-adjustSize     {0|1}'             adjust size when attaching"
-      "\n      '-enableModes    {0|1}'             enable modes when attaching"
-      "\n      '-view  {active | [name of view]}'  display manipulator only in defined view,"
-      "\n                                          by default it is displayed in all views of the current viewer"
-      "\n      '-detach'                           detach manipulator"
-      "\n      '-startTransform mouse_x mouse_y' - invoke start of transformation"
-      "\n      '-transform      mouse_x mouse_y' - invoke transformation"
-      "\n      '-stopTransform  [abort]'         - invoke stop of transformation"
-      "\n      '-move x y z'                     - move attached object"
-      "\n      '-rotate x y z dx dy dz angle'    - rotate attached object"
-      "\n      '-scale factor'                   - scale attached object"
-      "\n      '-autoActivate      {0|1}'        - set activation on detection"
-      "\n      '-followTranslation {0|1}'        - set following translation transform"
-      "\n      '-followRotation    {0|1}'        - set following rotation transform"
-      "\n      '-followDragging    {0|1}'        - set following dragging transform"
-      "\n      '-gap value'                      - set gap between sub-parts"
-      "\n      '-part axis mode    {0|1}'        - set visual part"
-      "\n      '-parts axis mode   {0|1}'        - set visual part"
-      "\n      '-pos x y z [nx ny nz [xx xy xz]' - set position of manipulator"
-      "\n      '-size value'                     - set size of manipulator"
-      "\n      '-zoomable {0|1}'                 - set zoom persistence",
-    __FILE__, VManipulator, group);
+  addCmd ("vactivate", VActivate, /* [vactivate] */ R"(
+vactivate view_id [-noUpdate]
+Activates view(viewer window) defined by its view_id.
+)" /* [vactivate] */);
 
-  theCommands.Add("vselprops",
-    "\n    vselprops [dynHighlight|localDynHighlight|selHighlight|localSelHighlight] [options]"
-    "\n    Customizes selection and dynamic highlight parameters for the whole interactive context:"
-    "\n    -autoActivate {0|1}     : disables|enables default computation and activation of global selection mode"
-    "\n    -autoHighlight {0|1}    : disables|enables automatic highlighting in 3D Viewer"
-    "\n    -highlightSelected {0|1}: disables|enables highlighting of detected object in selected state"
-    "\n    -pickStrategy {first|topmost} : defines picking strategy"
-    "\n                            'first'   to pick first acceptable (default)"
-    "\n                            'topmost' to pick only topmost (and nothing, if topmost is rejected by filters)"
-    "\n    -pixTol    value        : sets up pixel tolerance"
-    "\n    -depthTol {uniform|uniformpx} value : sets tolerance for sorting results by depth"
-    "\n    -depthTol {sensfactor}  : use sensitive factor for sorting results by depth"
-    "\n    -preferClosest {0|1}    : sets if depth should take precedence over priority while sorting results"
-    "\n    -dispMode  dispMode     : sets display mode for highlighting"
-    "\n    -layer     ZLayer       : sets ZLayer for highlighting"
-    "\n    -color     {name|r g b} : sets highlight color"
-    "\n    -transp    value        : sets transparency coefficient for highlight"
-    "\n    -material  material     : sets highlight material"
-    "\n    -print                  : prints current state of all mentioned parameters",
-    __FILE__, VSelectionProperties, group);
-  theCommands.Add ("vhighlightselected",
-                   "vhighlightselected [0|1]: alias for vselprops -highlightSelected.\n",
-                   __FILE__, VSelectionProperties, group);
+  addCmd ("vviewlist", VViewList, /* [vviewlist] */ R"(
+vviewlist [format={tree, long}]=tree
+Prints current list of views per viewer and graphic_driver ID shared between viewers
+ - format: format of result output, if tree the output is a tree view;
+           otherwise it's a list of full view names.
+)" /* [vviewlist] */);
 
-  theCommands.Add ("vseldump",
-                   "vseldump file -type {depth|unnormDepth|object|owner|selMode|entity|surfNormal}=depth -pickedIndex Index=1"
-                   "\n\t\t:       [-xrPose base|head=base]"
-                   "\n\t\t: Generate an image based on detection results:"
-                   "\n\t\t:   depth       normalized depth values"
-                   "\n\t\t:   unnormDepth unnormalized depth values"
-                   "\n\t\t:   object      color of detected object"
-                   "\n\t\t:   owner       color of detected owner"
-                   "\n\t\t:   selMode     color of selection mode"
-                   "\n\t\t:   entity      color of etected entity"
-                   "\n\t\t:   surfNormal  normal direction values",
-                   __FILE__, VDumpSelectionImage, group);
+  addCmd ("vhelp", VHelp, /* [vhelp] */ R"(
+vhelp : display help on the viewer commands and list of hotkeys.
+)" /* [vhelp] */);
 
-  theCommands.Add ("vviewcube",
-                   "vviewcube name"
-                   "\n\t\t: Displays interactive view manipualtion object."
-                   "\n\t\t: Options: "
-                   "\n\t\t:   -reset                   reset geomertical and visual attributes'"
-                   "\n\t\t:   -size Size               adapted size of View Cube"
-                   "\n\t\t:   -boxSize Size            box size"
-                   "\n\t\t:   -axes  {0|1}             show/hide axes (trihedron)"
-                   "\n\t\t:   -edges {0|1}             show/hide edges of View Cube"
-                   "\n\t\t:   -vertices {0|1}          show/hide vertices of View Cube"
-                   "\n\t\t:   -Yup {0|1} -Zup {0|1}    set Y-up or Z-up view orientation"
-                   "\n\t\t:   -color Color             color of View Cube"
-                   "\n\t\t:   -boxColor Color          box color"
-                   "\n\t\t:   -boxSideColor Color      box sides color"
-                   "\n\t\t:   -boxEdgeColor Color      box edges color"
-                   "\n\t\t:   -boxCornerColor Color    box corner color"
-                   "\n\t\t:   -textColor Color         color of side text of view cube"
-                   "\n\t\t:   -innerColor Color        inner box color"
-                   "\n\t\t:   -transparency Value      transparency of object within [0, 1] range"
-                   "\n\t\t:   -boxTransparency Value   transparency of box    within [0, 1] range"
-                   "\n\t\t:   -xAxisTextColor Color    color of X axis label"
-                   "\n\t\t:   -yAxisTextColor Color    color of Y axis label"
-                   "\n\t\t:   -zAxisTextColor Color    color of Z axis label"
-                   "\n\t\t:   -font Name               font name"
-                   "\n\t\t:   -fontHeight Value        font height"
-                   "\n\t\t:   -boxFacetExtension Value box facet extension"
-                   "\n\t\t:   -boxEdgeGap Value        gap between box edges and box sides"
-                   "\n\t\t:   -boxEdgeMinSize Value    minimal box edge size"
-                   "\n\t\t:   -boxCornerMinSize Value  minimal box corner size"
-                   "\n\t\t:   -axesPadding Value       padding between box and arrows"
-                   "\n\t\t:   -roundRadius Value       relative radius of corners of sides within [0.0, 0.5] range"
-                   "\n\t\t:   -axesRadius Value        radius of axes of the trihedron"
-                   "\n\t\t:   -axesConeRadius Value    radius of the cone (arrow) of the trihedron"
-                   "\n\t\t:   -axesSphereRadius Value  radius of the sphere (central point) of trihedron"
-                   "\n\t\t:   -fixedanimation {0|1}    uninterruptible animation loop"
-                   "\n\t\t:   -duration Seconds        animation duration in seconds",
-    __FILE__, VViewCube, group);
+  addCmd ("vviewproj", VViewProj, /* [vviewproj] */ R"(
+vviewproj [top|bottom|left|right|front|back|axoLeft|axoRight]
+          [+-X+-Y+-Z] [-Zup|-Yup] [-frame +-X+-Y]
+Setup view direction
+ -Yup      use Y-up convention instead of Zup (which is default).
+ +-X+-Y+-Z define direction as combination of DX, DY and DZ;
+           for example '+Z' will show front of the model,
+           '-X-Y+Z' will define left axonometric view.
+ -frame    define camera Up and Right directions (regardless Up convention);
+           for example '+X+Z' will show front of the model with Z-up.
+)" /* [vviewproj] */);
 
-  theCommands.Add("vcolorconvert" ,
-                  "vcolorconvert {from|to} type C1 C2 C2"
-                  "\n\t\t: vcolorconvert from type C1 C2 C2: Converts color from specified color space to linear RGB"
-                  "\n\t\t: vcolorconvert to type R G B: Converts linear RGB color to specified color space"
-                  "\n\t\t: type can be sRGB, HLS, Lab, or Lch",
-                  __FILE__,VColorConvert,group);
-  theCommands.Add("vcolordiff" ,
-                  "vcolordiff R1 G1 B1 R2 G2 B2: returns CIEDE2000 color difference between two RGB colors",
-                  __FILE__,VColorDiff,group);
-  theCommands.Add("vselbvhbuild",
-                  "vselbvhbuild [{0|1}] [-nbThreads value] [-wait]"
-                  "\n\t\t: Turns on/off prebuilding of BVH within background thread(s)"
-                  "\n\t\t:   -nbThreads   number of threads, 1 by default; if < 1 then used (NbLogicalProcessors - 1)"
-                  "\n\t\t:   -wait        waits for building all of BVH",
-                  __FILE__,VSelBvhBuild,group);
+  addCmd ("vtop", VViewProj, /* [vtop] */ R"(
+vtop or <T> : Display top view (+X+Y) in the 3D viewer window.
+)" /* [vtop] */);
+
+  addCmd ("vbottom", VViewProj, /* [vbottom] */ R"(
+vbottom : Display bottom view (+X-Y) in the 3D viewer window.
+)" /* [vbottom] */);
+
+  addCmd ("vleft", VViewProj, /* [vleft] */ R"(
+vleft : Display left view (-Y+Z) in the 3D viewer window.
+)" /* [vleft] */);
+
+  addCmd ("vright", VViewProj, /* [vright] */ R"(
+vright : Display right view (+Y+Z) in the 3D viewer window.
+)" /* [vright] */);
+
+  addCmd ("vaxo", VViewProj, /* [vaxo] */ R"(
+vaxo or <A> : Display axonometric view (+X-Y+Z) in the 3D viewer window.
+)" /* [vaxo] */);
+
+  addCmd ("vfront", VViewProj, /* [vfront] */ R"(
+vfront : Display front view (+X+Z) in the 3D viewer window.
+)" /* [vfront] */);
+
+  addCmd ("vback", VViewProj, /* [vfront] */ R"(
+vback : Display back view (-X+Z) in the 3D viewer window.
+)" /* [vback] */);
+
+  addCmd ("vpick", VPick, /* [vpick] */ R"(
+vpick X Y Z [shape subshape]
+)" /* [vpick] */);
+
+  addCmd ("vfit", VFit, /* [vfit] */ R"(
+vfit or <F> [-selected] [-noupdate]
+Fit all / selected. Objects in the view are visualized to occupy the maximum surface.
+)" /* [vfit] */);
+
+  addCmd ("vfitarea", VFitArea, /* [vfitarea] */ R"(
+vfitarea [x1 y1 x2 y2] [x1 y1 z1 x2 y2 z2]
+Fit view to show area located between two points
+given in world 2D or 3D coordinates.
+)" /* [vfitarea] */);
+
+  addCmd ("vzfit", VZFit, /* [vzfit] */ R"(
+vzfit [scale]
+Automatic depth panning.
+Matches Z near, Z far view volume planes to the displayed objects.
+ - "scale" specifies factor to scale computed z range.
+)" /* [vzfit] */);
+
+  addCmd ("vrepaint", VRepaint, /* [vrepaint] */ R"(
+vrepaint [-immediate] [-continuous FPS]
+Force redraw of active View.
+ -immediate  flag performs redraw of immediate layers only;
+ -continuous activates/deactivates continuous redraw of active View,
+             0 means no continuous rendering,
+            -1 means non-stop redraws,
+            >0 specifies target framerate.
+)" /* [vrepaint] */);
+
+  addCmd ("vclear", VClear, /* [vclear] */ R"(
+vclear : Remove all the object from the viewer
+)" /* [vclear] */);
+
+  addCmd ("vbackground", VBackground, /* [vbackground] */ R"(
+vbackground [-color Color [-default]]
+    [-gradient Color1 Color2 [-default]
+    [-gradientMode {NONE|HORIZONTAL|VERTICAL|DIAG1|DIAG2|CORNER1|CORNER2|CORNER3|ELLIPTICAL}]=VERT]
+    [-imageFile ImageFile [-imageMode {CENTERED|TILED|STRETCH|NONE}]=CENTERED [-srgb {0|1}]=1]
+    [-cubemap CubemapFile1 [CubeMapFiles2-5] [-order TilesIndexes1-6] [-invertedz]=0]
+    [-skydome [-sunDir X Y Z=0 1 0] [-cloud Cloudy=0.2] [-time Time=0.0]
+              [-fog Haze=0.0] [-size SizePx=512]]
+    [-pbrEnv {ibl|noibl|keep}]
+Changes background or some background settings.
+ -color        sets background color
+ -gradient     sets background gradient starting and ending colors
+ -gradientMode sets gradient fill method
+ -default      sets background default gradient or color
+ -imageFile    sets filename of image used as background
+ -imageMode    sets image fill type
+ -cubemap      sets environment cubemap as background
+ -invertedz    sets inversion of Z axis for background cubemap rendering; FALSE when unspecified
+ -pbrEnv       sets on/off Image Based Lighting (IBL) from background cubemap for PBR
+ -srgb         prefer sRGB texture format when applicable; TRUE when unspecified"
+ -order        defines order of tiles in one image cubemap
+               TileIndexi defubes an index in range [0, 5] for i tile of one image packed cubemap
+               (has no effect in case of multi-image cubemaps).
+Skydome background parameters (generated cubemap):
+ -skydome      sets procedurally generated skydome as background
+ -sunDir       sets direction to the sun, direction with negative y component represents moon direction (-x, -y, -z)
+ -cloud        sets cloud intensity (0.0 - clear sky, 1.0 - very high cloudy)
+ -time         might be tweaked to slightly change appearance of clouds
+ -fog          sets mist intensity (0.0 - no mist at all, 1.0 - high mist)
+ -size         sets size in pixels of cubemap side
+)" /* [vbackground] */);
+
+  addCmd ("vsetbg", VBackground, /* [vsetbg] */ R"(
+Alias for 'vbackground -imageFile ImageFile [-imageMode FillType]'.
+)" /* [vsetbg] */);
+
+  addCmd ("vsetbgmode", VBackground, /* [vsetbgmode] */ R"(
+Alias for 'vbackground -imageMode FillType'.
+)" /* [vsetbgmode] */);
+
+  addCmd ("vsetgradientbg", VBackground, /* [vsetgradientbg] */ R"(
+Alias for 'vbackground -gradient Color1 Color2 -gradientMode FillMethod'.
+)" /* [vsetgradientbg] */);
+
+  addCmd ("vsetgrbgmode", VBackground, /* [vsetgrbgmode] */ R"(
+Alias for 'vbackground -gradientMode FillMethod'.
+)" /* [vsetgrbgmode] */);
+
+  addCmd ("vsetcolorbg", VBackground, /* [vsetcolorbg] */ R"(
+Alias for 'vbackground -color Color'.
+)" /* [vsetcolorbg] */);
+
+  addCmd ("vsetdefaultbg", VBackground, /* [vsetdefaultbg] */ R"(
+Alias for 'vbackground -default -gradient Color1 Color2 [-gradientMode FillMethod]'
+  and for 'vbackground -default -color Color'.
+)" /* [vsetdefaultbg] */);
+
+  addCmd ("vscale", VScale, /* [vscale] */ R"(
+vscale X Y Z
+)" /* [vscale] */);
+
+  addCmd ("vzbufftrihedron", VZBuffTrihedron, /* [vzbufftrihedron] */ R"(
+vzbufftrihedron [{-on|-off}=-on] [-type {wireframe|zbuffer}=zbuffer]
+       [-position center|left_lower|left_upper|right_lower|right_upper]
+       [-scale value=0.1] [-size value=0.8] [-arrowDiam value=0.05]
+       [-colorArrowX color=RED] [-colorArrowY color=GREEN] [-colorArrowZ color=BLUE]
+       [-nbfacets value=12] [-colorLabels color=WHITE]
+       [-colorLabelX color] [-colorLabelY color] [-colorLabelZ color]
+Displays a trihedron.
+)" /* [vzbufftrihedron] */);
+
+  addCmd ("vrotate", VRotate, /* [vrotate] */ R"(
+vrotate [[-mouseStart X Y] [-mouseMove X Y]]|[AX AY AZ [X Y Z]]
+ -mouseStart start rotation according to the mouse position;
+ -mouseMove  continue rotation with angle computed
+             from last and new mouse position.
+)" /* [vrotate] */);
+
+  addCmd ("vzoom", VZoom, /* [vzoom] */ R"(
+vzoom coef
+)" /* [vzoom] */);
+
+  addCmd ("vpan", VPan, /* [vpan] */ R"(
+vpan dx dy
+)" /* [vpan] */);
+
+  addCmd ("vcolorscale", VColorScale, /* [vcolorscale] */ R"(
+vcolorscale name [-noupdate|-update] [-demo]
+      [-range RangeMin=0 RangeMax=1 NbIntervals=10]
+      [-font HeightFont=20]
+      [-logarithmic {on|off}=off] [-reversed {on|off}=off]
+      [-smoothTransition {on|off}=off]
+      [-hueRange MinAngle=230 MaxAngle=0]
+      [-colorRange MinColor=BLUE1 MaxColor=RED]
+      [-textPos {left|right|center|none}=right]
+      [-labelAtBorder {on|off}=on]
+      [-colors Color1 Color2 ...] [-color Index Color]
+      [-labels Label1 Label2 ...] [-label Index Label]
+      [-freeLabels NbOfLabels Label1 Label2 ...]
+      [-xy Left=0 Bottom=0]
+      [-uniform lightness hue_from hue_to]
+ -demo       display a color scale with demonstration values
+ -colors     set colors for all intervals
+ -color      set color for specific interval
+ -uniform    generate colors with the same lightness
+ -textpos    horizontal label position relative to color scale bar
+ -labelAtBorder vertical label position relative to color interval;
+             at border means the value inbetween neighbor intervals,
+             at center means the center value within current interval
+ -labels     set labels for all intervals
+ -freeLabels same as -labels but does not require
+             matching the number of intervals
+ -label      set label for specific interval
+ -title      set title
+ -reversed   setup smooth color transition between intervals
+ -smoothTransition swap colorscale direction
+ -hueRange   set hue angles corresponding to minimum and maximum values
+)" /* [vcolorscale] */);
+
+  addCmd ("vgraduatedtrihedron", VGraduatedTrihedron, /* [vgraduatedtrihedron] */ R"(
+vgraduatedtrihedron : -on/-off [-xname Name] [-yname Name] [-zname Name] [-arrowlength Value]
+    [-namefont Name] [-valuesfont Name]
+    [-xdrawname on/off] [-ydrawname on/off] [-zdrawname on/off]
+    [-xnameoffset IntVal] [-ynameoffset IntVal] [-znameoffset IntVal]
+    [-xnamecolor Color] [-ynamecolor Color] [-znamecolor Color]
+    [-xdrawvalues on/off] [-ydrawvalues on/off] [-zdrawvalues on/off]
+    [-xvaluesoffset IntVal] [-yvaluesoffset IntVal] [-zvaluesoffset IntVal]
+    [-xcolor Color] [-ycolor Color] [-zcolor Color]
+    [-xdrawticks on/off] [-ydrawticks on/off] [-zdrawticks on/off]
+    [-xticks Number] [-yticks Number] [-zticks Number]
+    [-xticklength IntVal] [-yticklength IntVal] [-zticklength IntVal]
+    [-drawgrid on/off] [-drawaxes on/off]
+Display or erase graduated trihedron
+ - xname, yname, zname - names of axes, default: X, Y, Z
+ - namefont - font of axes names. Default: Arial
+ - xnameoffset, ynameoffset, znameoffset - offset of name
+   from values or tickmarks or axis. Default: 30
+ - xnamecolor, ynamecolor, znamecolor - colors of axes names
+ - xvaluesoffset, yvaluesoffset, zvaluesoffset - offset of values
+   from tickmarks or axis. Default: 10
+ - valuesfont - font of axes values. Default: Arial
+ - xcolor, ycolor, zcolor - color of axis and values
+ - xticks, yticks, xzicks - number of tickmark on axes. Default: 5
+ - xticklength, yticklength, xzicklength - length of tickmark on axes. Default: 10
+)" /* [vgraduatedtrihedron] */);
+
+  addCmd ("vtile", VTile, /* [vtile] */ R"(
+vtile [-totalSize W H] [-lowerLeft X Y] [-upperLeft X Y] [-tileSize W H]
+Setup view to draw a tile (a part of virtual bigger viewport).
+ -totalSize the size of virtual bigger viewport
+ -tileSize  tile size (the view size will be used if omitted)
+ -lowerLeft tile offset as lower left corner
+ -upperLeft tile offset as upper left corner
+)" /* [vtile] */);
+
+  addCmd ("vzlayer", VZLayer, /* [vzlayer] */ R"(
+vzlayer [layerId]
+        [-add|-delete|-get|-settings] [-insertBefore AnotherLayer] [-insertAfter AnotherLayer]
+        [-origin X Y Z] [-cullDist Distance] [-cullSize Size]
+        [-enable|-disable {depthTest|depthWrite|depthClear|depthoffset}]
+        [-enable|-disable {positiveOffset|negativeOffset|textureenv|rayTracing}]
+ZLayer list management
+ -add      add new z layer to viewer and print its id
+ -insertBefore add new z layer and insert it before existing one
+ -insertAfter  add new z layer and insert it after  existing one
+ -delete   delete z layer
+ -get      print sequence of z layers
+ -settings print status of z layer settings
+ -disable  disables given setting
+ -enable   enables  given setting
+)" /* [vzlayer] */);
+
+  addCmd ("vlayerline", VLayerLine, /* [vlayerline] */ R"(
+vlayerline x1 y1 x2 y2 [linewidth=0.5] [linetype=0] [transparency=1.0]
+)" /* [vlayerline] */);
+
+  addCmd ("vgrid", VGrid, /* [vgrid] */ R"(
+vgrid [off] [-type {rect|circ}] [-mode {line|point}] [-origin X Y] [-rotAngle Angle] [-zoffset DZ]
+      [-step X Y] [-size DX DY]
+      [-step StepRadius NbDivisions] [-radius Radius]
+)" /* [vgrid] */);
+
+  addCmd ("vpriviledgedplane", VPriviledgedPlane, /* [vpriviledgedplane] */ R"(
+vpriviledgedplane [Ox Oy Oz Nx Ny Nz [Xx Xy Xz]]
+Sets or prints viewer's priviledged plane geometry:
+  Ox, Oy, Oz - plane origin;
+  Nx, Ny, Nz - plane normal direction;
+  Xx, Xy, Xz - plane x-reference axis direction.
+)" /* [vpriviledgedplane] */);
+
+  addCmd ("vconvert", VConvert, /* [vconvert] */ R"(
+vconvert v [Mode={window|view}]
+vconvert x y [Mode={window|view|grid|ray}]
+vconvert x y z [Mode={window|grid}]
+Convert the given coordinates to window/view/model space:
+ - window - convert to window coordinates, pixels;
+ - view   - convert to view projection plane;
+ - grid   - convert to model coordinates, given on grid;
+ - ray    - convert projection ray to model coordinates.
+)" /* [vconvert] */);
+
+  addCmd ("vfps", VFps, /* [vfps] */ R"(
+vfps [framesNb=100] [-duration seconds] : estimate average frame rate for active view.
+)" /* [vfps] */);
+
+  addCmd ("vstereo", VStereo, /* [vstereo] */ R"(
+vstereo [0|1] [-mode Mode] [-reverse {0|1}]
+        [-mirrorComposer] [-hmdfov2d AngleDegrees] [-unitFactor MetersFactor]
+        [-anaglyph Filter] [-smoothInterlacing]
+Control stereo output mode. Available modes for -mode:
+  quadBuffer       OpenGL QuadBuffer stereo;
+    requires driver support;
+    should be called BEFORE vinit!
+  anaglyph         Anaglyph glasses, filters for -anaglyph:
+    redCyan, redCyanSimple, yellowBlue, yellowBlueSimple, greenMagentaSimple.
+  rowInterlaced    row-interlaced display
+    smooth         smooth interlaced output for better text readability
+  columnInterlaced column-interlaced display
+  chessBoard       chess-board output
+  sideBySide       horizontal pair
+  overUnder        vertical   pair
+  openVR           OpenVR (HMD), extra options:
+    -mirrorComposer flag to mirror VR frame in the window (debug);
+    -unitFactor     specifies meters scale factor for mapping VR input.
+)" /* [vstereo] */);
+
+  addCmd ("vmemgpu", VMemGpu, /* [vmemgpu] */ R"(
+vmemgpu [f]: print system-dependent GPU memory information if available;
+with f option returns free memory in bytes.
+)" /* [vmemgpu] */);
+
+  addCmd ("vreadpixel", VReadPixel, /* [vreadpixel] */ R"(
+vreadpixel xPixel yPixel [{rgb|rgba|sRGB|sRGBa|depth|hls|rgbf|rgbaf}=rgba] [-name|-hex]
+Read pixel value for active view.
+)" /* [vreadpixel] */);
+
+  addCmd ("diffimage", VDiffImage, /* [diffimage] */ R"(
+diffimage imageFile1 imageFile2 [diffImageFile]
+          [-toleranceOfColor {0..1}=0] [-blackWhite {on|off}=off] [-borderFilter {on|off}=off]
+          [-display viewName prsName1 prsName2 prsNameDiff] [-exitOnClose] [-closeOnEscape]
+Compare two images by content and generate difference image.
+When -exitOnClose is specified, closing the view will exit application.
+When -closeOnEscape is specified, view will be closed on pressing Escape.
+)" /* [diffimage] */);
+
+  addCmd ("vselect", VSelect, /* [vselect] */ R"(
+vselect x1 y1 [x2 y2 [x3 y3 ... xn yn]] [-allowoverlap 0|1]
+        [-replace|-replaceextra|-xor|-add|-remove]
+Emulate different types of selection:
+ 1) Single click selection.
+ 2) Selection with rectangle having corners at pixel positions (x1,y1) and (x2,y2).
+ 3) Selection with polygon having corners in pixel positions (x1,y1), (x2,y2),...,(xn,yn).
+ 4) -allowoverlap manages overlap and inclusion detection in rectangular and polygonal selection.
+    If the flag is set to 1, both sensitives that were included completely
+    and overlapped partially by defined rectangle or polygon will be detected,
+    otherwise algorithm will chose only fully included sensitives.
+    Default behavior is to detect only full inclusion
+    (partial inclusion - overlap - is not allowed by default).
+ 5) Selection scheme replace, replaceextra, xor, add or remove (replace by default).
+)" /* [vselect] */);
+
+  addCmd ("vmoveto", VMoveTo, /* [vmoveto] */ R"(
+vmoveto [x y] [-reset]
+Emulate cursor movement to pixel position (x,y).
+ -reset resets current highlighting.
+)" /* [vmoveto] */);
+
+  addCmd ("vselaxis", VSelectByAxis, /* [vselaxis] */ R"(
+vselaxis x y z dx dy dz [-onlyTop 0|1] [-display Name] [-showNormal 0|1]"
+Provides intersection by given axis and print result intersection points.
+ -onlyTop       switches On/Off mode to find only top point or all;
+ -display Name  displays intersecting axis and result intersection points for debug goals;
+ -showNormal    adds displaying of normal in intersection point or not.
+)" /* [vselaxis] */);
+
+  addCmd ("vviewparams", VViewParams, /* [vviewparams] */ R"(
+vviewparams [-args] [-scale [s]]
+            [-eye [x y z]] [-at [x y z]] [-up [x y z]]
+            [-proj [x y z]] [-center x y] [-size sx]
+Manage current view parameters (camera orientation) or prints all
+current values when called without argument.
+ -scale [s]    prints or sets viewport relative scale
+ -eye  [x y z] prints or sets eye location
+ -at   [x y z] prints or sets center of look
+ -up   [x y z] prints or sets direction of up vector
+ -proj [x y z] prints or sets direction of look
+ -center x y   sets location of center of the screen in pixels
+ -size [sx]    prints viewport projection width and height sizes
+               or changes the size of its maximum dimension
+ -args         prints vviewparams arguments for restoring current view
+)" /* [vviewparams] */);
+
+  addCmd ("v2dmode", V2DMode, /* [v2dmode] */ R"(
+v2dmode [-name viewName] [-mode {-on|-off}=-on]
+  name - name of existing view, if not defined, the active view is changed;
+  mode - switches On/Off rotation mode.
+Set 2D mode of the active viewer manipulating. The following mouse and key actions are disabled:
+ - rotation of the view by 3rd mouse button with Ctrl active
+ - set view projection using key buttons: A/D/T/B/L/R for AXO, Reset, Top, Bottom, Left, Right
+View camera position might be changed only by commands.
+)" /* [v2dmode] */);
+
+  addCmd ("vanimation", VAnimation, /* [vanimation] */ R"(
+Alias for vanim
+)" /* [vanimation] */);
+
+  addCmd ("vanim", VAnimation, /* [vanim] */ R"(
+List existing animations:
+  vanim
+
+Animation playback:
+  vanim name {-play|-resume|-pause|-stop} [playFrom [playDuration]]
+             [-speed Coeff] [-freeLook] [-noPauseOnClick] [-lockLoop]
+
+  -speed    playback speed (1.0 is normal speed)
+  -freeLook skip camera animations
+  -noPauseOnClick do not pause animation on mouse click
+  -lockLoop disable any interactions
+
+Animation definition:
+  vanim Name/sub/name [-clear] [-delete]
+        [-start TimeSec] [-duration TimeSec] [-end TimeSec]
+
+Animation name defined in path-style (anim/name or anim.name)
+specifies nested animations.
+There is no syntax to explicitly add new animation,
+and all non-existing animations within the name will be
+implicitly created on first use (including parents).
+
+Each animation might define the SINGLE action (see below),
+like camera transition, object transformation or custom callback.
+Child animations can be used for defining concurrent actions.
+
+Camera animation:
+  vanim name -view [-eye1 X Y Z] [-eye2 X Y Z]
+                   [-at1  X Y Z] [-at2  X Y Z]
+                   [-up1  X Y Z] [-up2  X Y Z]
+                   [-scale1 Scale] [-scale2 Scale]
+  -eyeX   camera Eye positions pair (start and end)
+  -atX    camera Center positions pair
+  -upX    camera Up directions pair
+  -scaleX camera Scale factors pair
+
+Object animation:
+  vanim name -object [-loc1 X Y Z] [-loc2 X Y Z]
+                     [-rot1 QX QY QZ QW] [-rot2 QX QY QZ QW]
+                     [-scale1 Scale] [-scale2 Scale]
+ -locX   object Location points pair (translation)
+ -rotX   object Orientations pair (quaternions)
+ -scaleX object Scale factors pair (quaternions)
+
+Custom callback:
+  vanim name -invoke "Command Arg1 Arg2 %Pts %LocalPts %Normalized ArgN"
+
+  %Pts        overall animation presentation timestamp
+  %LocalPts   local animation timestamp
+  %Normalized local animation normalized value in range 0..1
+
+Video recording:
+  vanim name -record FileName [Width Height] [-fps FrameRate=24]
+        [-format Format] [-vcodec Codec] [-pix_fmt PixelFormat]
+        [-crf Value] [-preset Preset]
+  -fps     video framerate
+  -format  file format, container (matroska, etc.)
+  -vcodec  video codec identifier (ffv1, mjpeg, etc.)
+  -pix_fmt image pixel format (yuv420p, rgb24, etc.)
+  -crf     constant rate factor (specific to codec)
+  -preset  codec parameters preset (specific to codec)
+)" /* [vanim] */);
+
+  addCmd ("vchangeselected", VChangeSelected, /* [vchangeselected] */ R"(
+vchangeselected shape : Add shape to selection or remove one from it.
+)" /* [vchangeselected] */);
+
+  addCmd ("vnbselected", VNbSelected, /* [vnbselected] */ R"(
+vnbselected : Returns number of selected objects in the interactive context.
+)" /* [vnbselected] */);
+
+  addCmd ("vcamera", VCamera, /* [vcamera] */ R"(
+vcamera [PrsName] [-ortho] [-projtype]
+        [-persp]
+        [-fovy   [Angle]] [-distance [Distance]]
+        [-stereo] [-leftEye] [-rightEye]
+        [-iod [Distance]] [-iodType    [absolute|relative]]
+        [-zfocus [Value]] [-zfocusType [absolute|relative]]
+        [-fov2d  [Angle]] [-lockZup {0|1}]
+        [-rotationMode {active|pick|pickCenter|cameraAt|scene}]
+        [-navigationMode {orbit|walk|flight}]
+        [-xrPose base|head=base]
+Manages camera parameters.
+Displays frustum when presentation name PrsName is specified.
+Prints current value when option called without argument.
+
+Orthographic camera:
+ -ortho      activate orthographic projection.
+
+Perspective camera:
+ -persp      activate perspective  projection (mono);
+ -fovy       field of view in y axis, in degrees;
+ -fov2d      field of view limit for 2d on-screen elements;
+ -distance   distance of eye from camera center;
+ -lockZup    lock Z up (turntable mode);
+ -rotationMode rotation mode (gravity point);
+ -navigationMode navigation mode.
+
+Stereoscopic camera:
+ -stereo     perspective  projection (stereo);
+ -leftEye    perspective  projection (left  eye);
+ -rightEye   perspective  projection (right eye);
+ -iod        intraocular distance value;
+ -iodType    distance type, absolute or relative;
+ -zfocus     stereographic focus value;
+ -zfocusType focus type, absolute or relative.
+)" /* [vcamera] */);
+
+  addCmd ("vautozfit", VAutoZFit, /* [vautozfit] */ R"(
+vautozfit [on={1|0}] [scale]
+Prints or changes parameters of automatic z-fit mode:
+ "on" - turns automatic z-fit on or off;
+ "scale" - specifies factor to scale computed z range.
+)" /* [vautozfit] */);
+
+  addCmd ("vzrange", VZRange, /* [vzrange] */ R"(
+vzrange [znear] [zfar]
+Applies provided znear/zfar to view or prints current values.
+)" /* [vzrange] */);
+
+  addCmd ("vsetviewsize", VSetViewSize, /* [vsetviewsize] */ R"(
+vsetviewsize size
+)" /* [vsetviewsize] */);
+
+  addCmd ("vmoveview", VMoveView, /* [vmoveview] */ R"(
+vmoveview Dx Dy Dz [Start = 1|0]
+)" /* [vmoveview] */);
+
+  addCmd ("vtranslateview", VTranslateView, /* [vtranslateview] */ R"(
+vtranslateview Dx Dy Dz [Start = 1|0)]
+)" /* [vtranslateview] */);
+
+  addCmd ("vturnview", VTurnView, /* [vturnview] */ R"(
+vturnview Ax Ay Az [Start = 1|0]
+)" /* [vturnview] */);
+
+  addCmd ("vtextureenv", VTextureEnv, /* [vtextureenv] */ R"(
+vtextureenv {on|off} {image_file}
+            [{clamp|repeat} {decal|modulate} {nearest|bilinear|trilinear} ss st ts tt rot]
+Enables or disables environment mapping in the 3D view, loading the texture from the given standard
+or user-defined file and optionally applying texture mapping parameters.
+ ss, st - scale factors for s and t texture coordinates;
+ ts, tt - translation for s and t texture coordinates;
+ rot    - texture rotation angle in degrees.
+)" /* [vtextureenv] */);
+
+  addCmd ("vhlr", VHLR, /* [vhlr] */ R"(
+vhlr {on|off} [-showHidden={1|0}] [-algoType={algo|polyAlgo}] [-noupdate]
+Hidden Line Removal algorithm.
+ -showHidden if set ON, hidden lines are drawn as dotted ones;
+ -algoType   type of HLR algorithm:
+            'algo' - exact HLR algorithm is applied;
+            'polyAlgo' - polygonal HLR algorithm is applied.
+)" /* [vhlr] */);
+
+  addCmd ("vhlrtype", VHLRType, /* [vhlrtype] */ R"(
+vhlrtype {algo|polyAlgo} [shape_1 ... shape_n] [-noupdate]
+Changes the type of HLR algorithm using for shapes:
+ 'algo' - exact HLR algorithm is applied;
+ 'polyAlgo' - polygonal HLR algorithm is applied.
+If shapes are not given - option is applied to all shapes in the view.
+)" /* [vhlrtype] */);
+
+  addCmd ("vclipplane", VClipPlane, /* [vclipplane] */ R"(
+vclipplane planeName [{0|1}]
+    [-equation1 A B C D]
+    [-equation2 A B C D]
+    [-boxInterior MinX MinY MinZ MaxX MaxY MaxZ]
+    [-set|-unset|-setOverrideGlobal [objects|views]]
+    [-maxPlanes]
+    [-capping {0|1}]
+      [-color R G B] [-transparency Value] [-hatch {on|off|ID}]
+      [-texName Texture] [-texScale SX SY] [-texOrigin TX TY]
+        [-texRotate Angle]
+      [-useObjMaterial {0|1}] [-useObjTexture {0|1}]
+        [-useObjShader {0|1}]
+
+Clipping planes management:
+ -maxPlanes   print plane limit for view;
+ -delete      delete plane with given name;
+ {off|on|0|1} turn clipping on/off;
+ -set|-unset  set/unset plane for Object or View list;
+              applied to active View when list is omitted;
+ -equation A B C D change plane equation;
+ -clone SourcePlane NewPlane clone the plane definition.
+
+Capping options:
+ -capping {off|on|0|1} turn capping on/off;
+ -color R G B          set capping color;
+ -transparency Value   set capping transparency 0..1;
+ -texName Texture      set capping texture;
+ -texScale SX SY       set capping tex scale;
+ -texOrigin TX TY      set capping tex origin;
+ -texRotate Angle      set capping tex rotation;
+ -hatch {on|off|ID}    set capping hatching mask;
+ -useObjMaterial {off|on|0|1} use material of clipped object;
+ -useObjTexture  {off|on|0|1} use texture of clipped object;
+ -useObjShader   {off|on|0|1} use shader program of object.
+)" /* [vclipplane] */);
+
+  addCmd ("vdefaults", VDefaults, /* [vdefaults] */ R"(
+vdefaults [-absDefl value] [-devCoeff value] [-angDefl value]
+          [-autoTriang {off/on | 0/1}]
+)" /* [vdefaults] */);
+
+  addCmd ("vlight", VLight, /* [vlight] */ R"(
+vlight [lightName] [-noupdate]
+       [-clear|-defaults] [-layer Id] [-local|-global] [-disable|-enable]
+       [-type {ambient|directional|spotlight|positional}] [-name value]
+       [-position X Y Z] [-direction X Y Z] [-color colorName] [-intensity value]
+       [-headlight 0|1] [-castShadows 0|1]
+       [-range value] [-constAttenuation value] [-linearAttenuation value]
+       [-spotExponent value] [-spotAngle angleDeg]
+       [-smoothAngle value] [-smoothRadius value]
+       [-display] [-showName 1|0] [-showRange 1|0] [-prsZoomable 1|0] [-prsSize Value]
+       [-arcSize Value]
+
+Command manages light sources. Without arguments shows list of lights.
+Arguments affecting the list of defined/active lights:
+ -clear       remove all light sources;
+ -defaults    defines two standard light sources;
+ -reset       resets light source parameters to default values;
+ -type        sets type of light source;
+ -name        sets new name to light source;
+ -global      assigns light source to all views (default state);
+ -local       assigns light source to active view;
+ -zlayer      assigns light source to specified Z-Layer.
+
+Ambient light parameters:
+ -color       sets (normalized) light color;
+ -intensity   sets intensity of light source, 1.0 by default;
+              affects also environment cubemap intensity.
+
+Point light parameters:
+ -color       sets (normalized) light color;
+ -intensity   sets PBR intensity;
+ -range       sets clamping distance;
+ -constAtten  (obsolete) sets constant attenuation factor;
+ -linearAtten (obsolete) sets linear   attenuation factor;
+ -smoothRadius sets PBR smoothing radius.
+
+Directional light parameters:
+ -color       sets (normalized) light color;
+ -intensity   sets PBR intensity;
+ -direction   sets direction;
+ -headlight   sets headlight flag;
+ -castShadows enables/disables shadow casting;
+ -smoothAngle sets PBR smoothing angle (in degrees) within 0..90 range.
+
+Spot light parameters:
+ -color       sets (normalized) light color;
+ -intensity   sets PBR intensity;
+ -range       sets clamping distance;
+ -position    sets position;
+ -direction   sets direction;
+ -spotAngle   sets spotlight angle;
+ -spotExp     sets spotlight exponenta;
+ -headlight   sets headlight flag;
+ -constAtten  (obsolete) sets constant attenuation factor;
+ -linearAtten (obsolete) sets linear   attenuation factor.
+
+Light presentation parameters:
+ -display     adds light source presentation;
+ -showName    shows/hides the name of light source; 1 by default;
+ -showRange   shows/hides the range of spot/positional light source; 1 by default;
+ -prsZoomable makes light presentation zoomable/non-zoomable;
+ -prsDraggable makes light presentation draggable/non-draggable;
+ -prsSize     sets light presentation size;
+ -arcSize     sets arc presentation size(in pixels)
+              for rotation directional light source; 25 by default.
+
+Examples:
+ vlight redlight -type POSITIONAL -headlight 1 -pos 0 1 1 -color RED
+ vlight redlight -delete
+)" /* [vlight] */);
+
+  addCmd ("vpbrenv", VPBREnvironment, /* [vpbrenv] */ R"(
+vpbrenv -clear|-generate
+Clears or generates PBR environment map of active view.
+ -clear clears PBR environment (fills by white color);
+ -generate generates PBR environment from current background cubemap.
+)" /* [vpbrenv] */);
+
+  addCmd ("vraytrace", VRenderParams, /* [vraytrace] */ R"(
+vraytrace [0|1] : Turns on/off ray-tracing renderer.
+ 'vraytrace 0' alias for 'vrenderparams -raster'.
+ 'vraytrace 1' alias for 'vrenderparams -rayTrace'.
+)" /* [vraytrace] */);
+
+  addCmd ("vrenderparams", VRenderParams, /* [vrenderparams] */ R"(
+Manages rendering parameters, affecting visual appearance, quality and performance.
+Should be applied taking into account GPU hardware capabilities and performance.
+
+Common parameters:
+vrenderparams [-raster] [-shadingModel {unlit|facet|gouraud|phong|pbr|pbr_facet}=gouraud]
+              [-msaa 0..8=0] [-rendScale scale=1]
+              [-resolution value=72] [-fontHinting {off|normal|light}=off]
+              [-fontAutoHinting {auto|force|disallow}=auto]
+              [-oit {off|weight|peel}] [-oit weighted [depthFactor=0.0]] [-oit peeling [nbLayers=4]]
+              [-shadows {on|off}=on] [-shadowMapResolution value=1024] [-shadowMapBias value=0.005]
+              [-depthPrePass {on|off}=off] [-alphaToCoverage {on|off}=on]
+              [-frustumCulling {on|off|noupdate}=on] [-lineFeather width=1.0]
+              [-sync {default|views}] [-reset]
+ -raster          Disables GPU ray-tracing.
+ -shadingModel    Controls shading model.
+ -msaa            Specifies number of samples for MSAA.
+ -rendScale       Rendering resolution scale factor (supersampling, alternative to MSAA).
+ -resolution      Sets new pixels density (PPI) used as text scaling factor.
+ -fontHinting     Enables/disables font hinting for better readability on low-resolution screens.
+ -fontAutoHinting Manages font autohinting.
+ -lineFeather     Sets line feather factor while displaying mesh edges.
+ -alphaToCoverage Enables/disables alpha to coverage (needs MSAA).
+ -oit             Enables/disables order-independent transparency (OIT) rendering;
+      off         unordered transparency (but opaque objects implicitly draw first);
+      weighted    weight OIT is managed by depth weight factor 0.0..1.0;
+      peeling     depth peeling OIT is managed by number of peeling layers.
+  -shadows         Enables/disables shadows rendering.
+  -shadowMapResolution Shadow texture map resolution.
+  -shadowMapBias   Shadow map bias.
+  -depthPrePass    Enables/disables depth pre-pass.
+  -frustumCulling  Enables/disables objects frustum clipping or
+                   sets state to check structures culled previously.
+  -sync            Sets active View parameters as Viewer defaults / to other Views.
+  -reset           Resets active View parameters to Viewer defaults.
+
+Diagnostic output (on-screen overlay):
+vrenderparams [-perfCounters none|fps|cpu|layers|structures|groups|arrays|triangles|points
+                                 |gpuMem|frameTime|basic|extended|full|nofps|skipImmediate]
+              [-perfUpdateInterval nbSeconds=1] [-perfChart nbFrames=1] [-perfChartMax seconds=0.1]
+ -perfCounters       Show/hide performance counters (flags can be combined).
+ -perfUpdateInterval Performance counters update interval.
+ -perfChart          Show frame timers chart limited by specified number of frames.
+ -perfChartMax       Maximum time in seconds with the chart.
+
+Ray-Tracing options:
+vrenderparams [-rayTrace] [-rayDepth {0..10}=3] [-reflections {on|off}=off]
+              [-fsaa {on|off}=off] [-gleam {on|off}=off] [-env {on|off}=off]
+              [-gi {on|off}=off] [-brng {on|off}=off]
+              [-iss {on|off}=off] [-tileSize {1..4096}=32] [-nbTiles {64..1024}=256]
+              [-ignoreNormalMap {on|off}=off] [-twoSide {on|off}=off]
+              [-maxRad {value>0}=30.0]
+              [-aperture {value>=0}=0.0] [-focal {value>=0.0}=1.0]
+              [-exposure value=0.0] [-whitePoint value=1.0] [-toneMapping {disabled|filmic}=disabled]
+ -rayTrace     Enables  GPU ray-tracing.
+ -rayDepth     Defines maximum ray-tracing depth.
+ -reflections  Enables/disables specular reflections.
+ -fsaa         Enables/disables adaptive anti-aliasing.
+ -gleam        Enables/disables transparency shadow effects.
+ -gi           Enables/disables global illumination effects (Path-Tracing).
+ -env          Enables/disables environment map background.
+ -ignoreNormalMap Enables/disables normal map ignoring during path tracing.
+ -twoSide      Enables/disables two-sided BSDF models (PT mode).
+ -iss          Enables/disables adaptive screen sampling (PT mode).
+ -maxRad       Value used for clamping radiance estimation (PT mode).
+ -tileSize     Specifies   size of screen tiles in ISS mode (32 by default).
+ -nbTiles      Specifies number of screen tiles per Redraw in ISS mode (256 by default).
+ -aperture     Aperture size  of perspective camera for depth-of-field effect (0 disables DOF).
+ -focal        Focal distance of perspective camera for depth-of-field effect.
+ -exposure     Exposure value for tone mapping (0.0 value disables the effect).
+ -whitePoint   White point value for filmic tone mapping.
+ -toneMapping  Tone mapping mode (disabled, filmic).
+
+PBR environment baking parameters (advanced/debug):
+vrenderparams [-pbrEnvPow2size {power>0}=9] [-pbrEnvSMLN {levels>1}=6] [-pbrEnvBP {0..1}=0.99]
+              [-pbrEnvBDSN {samples>0}=1024] [-pbrEnvBSSN {samples>0}=256]
+ -pbrEnvPow2size Controls size of IBL maps (real size can be calculates as 2^pbrenvpow2size).
+ -pbrEnvSMLN     Controls number of mipmap levels used in specular IBL map.
+ -pbrEnvBDSN     Controls number of samples in Monte-Carlo integration during
+                 diffuse IBL map's sherical harmonics calculation.
+ -pbrEnvBSSN     Controls maximum number of samples per mipmap level
+                 in Monte-Carlo integration during specular IBL maps generation.
+ -pbrEnvBP       Controls strength of samples number reducing
+                 during specular IBL maps generation (1 disables reducing).
+
+Debug options:
+vrenderparams [-issd {on|off}=off] [-rebuildGlsl on|off]
+ -issd         Shows screen sampling distribution in ISS mode.
+ -rebuildGlsl  Rebuild Ray-Tracing GLSL programs (for debugging).
+ -brng         Enables/disables blocked RNG (fast coherent PT).
+)" /* [vrenderparams] */);
+
+  addCmd ("vstatprofiler", VStatProfiler, /* [vstatprofiler] */ R"(
+vstatprofiler [fps|cpu|allLayers|layers|allstructures|structures|groups
+                |allArrays|fillArrays|lineArrays|pointArrays|textArrays
+                |triangles|points|geomMem|textureMem|frameMem
+                |elapsedFrame|cpuFrameAverage|cpuPickingAverage|cpuCullingAverage|cpuDynAverage
+                |cpuFrameMax|cpuPickingMax|cpuCullingMax|cpuDynMax]
+              [-noredraw]
+Prints rendering statistics for specified counters or for all when unspecified.
+Set '-noredraw' flag to avoid additional redraw call and use already collected values.
+)" /* [vstatprofiler] */);
+
+  addCmd ("vplace", VPlace, /* [vplace] */ R"(
+vplace dx dy : Places the point (in pixels) at the center of the window
+)" /* [vplace] */);
+
+  addCmd ("vxrotate", VXRotate, /* [vxrotate] */ R"(
+vxrotate
+)" /* [vxrotate] */);
+
+  addCmd ("vmanipulator", VManipulator, /* [vmanipulator] */ R"(
+vmanipulator Name [-attach AISObject | -detach | ...]
+Tool to create and manage AIS manipulators.
+Options:
+ '-attach AISObject'                 attach manipulator to AISObject
+ '-adjustPosition {0|center|location|shapeLocation}' adjust position when attaching
+ '-adjustSize     {0|1}'             adjust size when attaching
+ '-enableModes    {0|1}'             enable modes when attaching
+ '-view  {active | [name of view]}'  display manipulator only in defined view,
+                                     by default it is displayed in all views of the current viewer
+ '-detach'                           detach manipulator
+ '-startTransform mouse_x mouse_y' - invoke start of transformation
+ '-transform      mouse_x mouse_y' - invoke transformation
+ '-stopTransform  [abort]'         - invoke stop of transformation
+ '-move x y z'                     - move attached object
+ '-rotate x y z dx dy dz angle'    - rotate attached object
+ '-scale factor'                   - scale attached object
+ '-autoActivate      {0|1}'        - set activation on detection
+ '-followTranslation {0|1}'        - set following translation transform
+ '-followRotation    {0|1}'        - set following rotation transform
+ '-followDragging    {0|1}'        - set following dragging transform
+ '-gap value'                      - set gap between sub-parts
+ '-part axis mode    {0|1}'        - set visual part
+ '-parts axis mode   {0|1}'        - set visual part
+ '-pos x y z [nx ny nz [xx xy xz]' - set position of manipulator
+ '-size value'                     - set size of manipulator
+ '-zoomable {0|1}'                 - set zoom persistence
+)" /* [vmanipulator] */);
+
+  addCmd ("vselprops", VSelectionProperties, /* [vselprops] */ R"(
+vselprops [dynHighlight|localDynHighlight|selHighlight|localSelHighlight] [options]
+Customizes selection and dynamic highlight parameters for the whole interactive context:
+ -autoActivate {0|1}     disables|enables default computation
+                         and activation of global selection mode
+ -autoHighlight {0|1}    disables|enables automatic highlighting in 3D Viewer
+ -highlightSelected {0|1} disables|enables highlighting of detected object in selected state
+ -pickStrategy {first|topmost} : defines picking strategy
+               'first'   to pick first acceptable (default)
+               'topmost' to pick only topmost (and nothing, if topmost is rejected by filters)
+ -pixTol    value        sets up pixel tolerance
+ -depthTol {uniform|uniformpx} value : sets tolerance for sorting results by depth
+ -depthTol {sensfactor}  use sensitive factor for sorting results by depth
+ -preferClosest {0|1}    sets if depth should take precedence over priority while sorting results
+ -dispMode  dispMode     sets display mode for highlighting
+ -layer     ZLayer       sets ZLayer for highlighting
+ -color     {name|r g b} sets highlight color
+ -transp    value        sets transparency coefficient for highlight
+ -material  material     sets highlight material
+ -print                  prints current state of all mentioned parameters
+)" /* [vselprops] */);
+
+  addCmd ("vhighlightselected", VSelectionProperties, /* [vhighlightselected] */ R"(
+vhighlightselected [0|1] : alias for vselprops -highlightSelected.
+)" /* [vhighlightselected] */);
+
+  addCmd ("vseldump", VDumpSelectionImage, /* [vseldump] */ R"(
+vseldump file -type {depth|unnormDepth|object|owner|selMode|entity|entityType|surfNormal}=depth
+         -pickedIndex Index=1
+         [-xrPose base|head=base]
+Generate an image based on detection results:
+  depth       normalized depth values
+  unnormDepth unnormalized depth values
+  object      color of detected object
+  owner       color of detected owner
+  selMode     color of selection mode
+  entity      color of detected entity
+  entityType  color of detected entity type
+  surfNormal  normal direction values
+)" /* [vseldump] */);
+
+  addCmd ("vviewcube", VViewCube, /* [vviewcube] */ R"(
+vviewcube name
+Displays interactive view manipulation object. Options:
+ -reset                   reset geometric and visual attributes
+ -size Size               adapted size of View Cube
+ -boxSize Size            box size
+ -axes  {0|1}             show/hide axes (trihedron)
+ -edges {0|1}             show/hide edges of View Cube
+ -vertices {0|1}          show/hide vertices of View Cube
+ -Yup {0|1} -Zup {0|1}    set Y-up or Z-up view orientation
+ -color Color             color of View Cube
+ -boxColor Color          box color
+ -boxSideColor Color      box sides color
+ -boxEdgeColor Color      box edges color
+ -boxCornerColor Color    box corner color
+ -textColor Color         color of side text of view cube
+ -innerColor Color        inner box color
+ -transparency Value      transparency of object within [0, 1] range
+ -boxTransparency Value   transparency of box    within [0, 1] range
+ -xAxisTextColor Color    color of X axis label
+ -yAxisTextColor Color    color of Y axis label
+ -zAxisTextColor Color    color of Z axis label
+ -font Name               font name
+ -fontHeight Value        font height
+ -boxFacetExtension Value box facet extension
+ -boxEdgeGap Value        gap between box edges and box sides
+ -boxEdgeMinSize Value    minimal box edge size
+ -boxCornerMinSize Value  minimal box corner size
+ -axesPadding Value       padding between box and arrows
+ -roundRadius Value       relative radius of corners of sides within [0.0, 0.5] range
+ -axesRadius Value        radius of axes of the trihedron
+ -axesConeRadius Value    radius of the cone (arrow) of the trihedron
+ -axesSphereRadius Value  radius of the sphere (central point) of trihedron
+ -fixedAnimation {0|1}    uninterruptible animation loop
+ -duration Seconds        animation duration in seconds
+)" /* [vviewcube] */);
+
+  addCmd ("vcolorconvert", VColorConvert, /* [vcolorconvert] */ R"(
+vcolorconvert [-from {sRGB|HLS|Lab|Lch|RGB}]=RGB [-to {sRGB|HLS|Lab|Lch|RGB|hex|name}]=RGB C1 C2 C2
+To convert color from specified color space to linear RGB:
+  vcolorconvert -from {sRGB|HLS|Lab|Lch|RGB} C1 C2 C2
+To convert linear RGB color to specified color space:
+  vcolorconvert -to {sRGB|HLS|Lab|Lch|RGB|hex|name} R G B
+)" /* [vcolorconvert] */);
+
+  addCmd ("vcolordiff", VColorDiff, /* [vcolordiff] */ R"(
+vcolordiff R1 G1 B1 R2 G2 B2 : returns CIEDE2000 color difference between two RGB colors.
+)" /* [vcolordiff] */);
+
+  addCmd ("vselbvhbuild", VSelBvhBuild, /* [vselbvhbuild] */ R"(
+vselbvhbuild [{0|1}] [-nbThreads value] [-wait]
+Turns on/off prebuilding of BVH within background thread(s).
+ -nbThreads   number of threads, 1 by default; if < 1 then used (NbLogicalProcessors - 1);
+ -wait        waits for building all of BVH.
+)" /* [vselbvhbuild] */);
 }

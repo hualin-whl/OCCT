@@ -21,9 +21,7 @@
 #include <AIS_GlobalStatus.hxx>
 #include <AIS_InteractiveObject.hxx>
 #include <AIS_MultipleConnectedInteractive.hxx>
-#include <Graphic3d_AspectFillArea3d.hxx>
 #include <Precision.hxx>
-#include <Prs3d_BasicAspect.hxx>
 #include <Prs3d_DatumAspect.hxx>
 #include <Prs3d_IsoAspect.hxx>
 #include <Prs3d_LineAspect.hxx>
@@ -31,8 +29,6 @@
 #include <Prs3d_PointAspect.hxx>
 #include <Prs3d_ShadingAspect.hxx>
 #include <SelectMgr_EntityOwner.hxx>
-#include <SelectMgr_SelectionManager.hxx>
-#include <TColStd_ListIteratorOfListOfInteger.hxx>
 #include <TColStd_MapIteratorOfMapOfTransient.hxx>
 #include <TopLoc_Location.hxx>
 #include <V3d_View.hxx>
@@ -110,7 +106,6 @@ namespace
 AIS_InteractiveContext::AIS_InteractiveContext(const Handle(V3d_Viewer)& MainViewer):
 myMainPM (new PrsMgr_PresentationManager (MainViewer->StructureManager())),
 myMainVwr(MainViewer),
-myMainSel(new StdSelect_ViewerSelector3d()),
 myToHilightSelected(Standard_True),
 mySelection(new AIS_Selection()),
 myFilters (new SelectMgr_AndOrFilter(SelectMgr_FilterType_OR)),
@@ -121,7 +116,7 @@ myPickingStrategy (SelectMgr_PickingStrategy_FirstAcceptable),
 myAutoHilight(Standard_True),
 myIsAutoActivateSelMode(Standard_True)
 {
-  mgrSelector = new SelectMgr_SelectionManager (myMainSel);
+  mgrSelector = new SelectMgr_SelectionManager (new StdSelect_ViewerSelector3d());
 
   myStyles[Prs3d_TypeOfHighlight_None]          = myDefaultDrawer;
   myStyles[Prs3d_TypeOfHighlight_Selected]      = new Prs3d_Drawer();
@@ -130,6 +125,7 @@ myIsAutoActivateSelMode(Standard_True)
   myStyles[Prs3d_TypeOfHighlight_LocalDynamic]  = new Prs3d_Drawer();
   myStyles[Prs3d_TypeOfHighlight_SubIntensity]  = new Prs3d_Drawer();
 
+  myDefaultDrawer->SetupOwnDefaults();
   myDefaultDrawer->SetZLayer(Graphic3d_ZLayerId_Default);
   myDefaultDrawer->SetDisplayMode(0);
   {
@@ -366,7 +362,7 @@ void AIS_InteractiveContext::ObjectsForView (AIS_ListOfInteractive&  theListOfIO
       continue;
     }
 
-    Handle(Graphic3d_ViewAffinity) anAffinity = myMainVwr->StructureManager()->ObjectAffinity (anObjIter.Key());
+    Handle(Graphic3d_ViewAffinity) anAffinity = anObjIter.Key()->ViewAffinity();
     const Standard_Boolean isVisible = anAffinity->IsVisible (aViewId);
     if (isVisible == theIsVisibleInView)
     {
@@ -406,17 +402,9 @@ void AIS_InteractiveContext::SetViewAffinity (const Handle(AIS_InteractiveObject
     return;
   }
 
-  Handle(Graphic3d_ViewAffinity) anAffinity = myMainVwr->StructureManager()->ObjectAffinity (theIObj);
+  Handle(Graphic3d_ViewAffinity) anAffinity = theIObj->ViewAffinity();
   Handle(Graphic3d_CView) aViewImpl = theView->View();
   anAffinity->SetVisible (aViewImpl->Identification(), theIsVisible == Standard_True);
-  if (theIsVisible)
-  {
-    theView->View()->ChangeHiddenObjects()->Remove (theIObj.get());
-  }
-  else
-  {
-    theView->View()->ChangeHiddenObjects()->Add (theIObj.get());
-  }
 }
 
 //=======================================================================
@@ -449,7 +437,8 @@ void AIS_InteractiveContext::Display (const Handle(AIS_InteractiveObject)& theIO
   if (!myObjects.IsBound (theIObj))
   {
     setObjectStatus (theIObj, PrsMgr_DisplayStatus_Displayed, theDispMode, theSelectionMode);
-    myMainVwr->StructureManager()->RegisterObject (theIObj);
+    theIObj->ViewAffinity()->SetVisible (true); // reset view affinity mask
+    myMainVwr->StructureManager()->RegisterObject (theIObj, theIObj->ViewAffinity());
     myMainPM->Display(theIObj, theDispMode);
     if (theSelectionMode != -1)
     {
@@ -525,7 +514,8 @@ void AIS_InteractiveContext::Load (const Handle(AIS_InteractiveObject)& theIObj,
     Standard_Integer aDispMode, aHiMod, aSelModeDef;
     GetDefModes (theIObj, aDispMode, aHiMod, aSelModeDef);
     setObjectStatus (theIObj, PrsMgr_DisplayStatus_Erased, aDispMode, theSelMode != -1 ? theSelMode : aSelModeDef);
-    myMainVwr->StructureManager()->RegisterObject (theIObj);
+    theIObj->ViewAffinity()->SetVisible (true); // reset view affinity mask
+    myMainVwr->StructureManager()->RegisterObject (theIObj, theIObj->ViewAffinity());
   }
 
   // Register theIObj in the selection manager to prepare further activation of selection
@@ -682,6 +672,8 @@ void AIS_InteractiveContext::Remove (const Handle(AIS_InteractiveObject)& theIOb
 //=======================================================================
 void AIS_InteractiveContext::RemoveAll (const Standard_Boolean theToUpdateViewer)
 {
+  ClearDetected();
+
   AIS_ListOfInteractive aList;
   ObjectsInside (aList);
   for (AIS_ListOfInteractive::Iterator aListIterator (aList); aListIterator.More(); aListIterator.Next())
@@ -704,11 +696,15 @@ void AIS_InteractiveContext::HilightWithColor(const Handle(AIS_InteractiveObject
                                               const Standard_Boolean theIsToUpdate)
 {
   if (theObj.IsNull())
+  {
     return;
+  }
 
   setContextToObject (theObj);
   if (!myObjects.IsBound (theObj))
+  {
     return;
+  }
 
   const Handle(AIS_GlobalStatus)& aStatus = myObjects (theObj);
   aStatus->SetHilightStatus (Standard_True);
@@ -720,7 +716,9 @@ void AIS_InteractiveContext::HilightWithColor(const Handle(AIS_InteractiveObject
   }
 
   if (theIsToUpdate)
+  {
     myMainVwr->Update();
+  }
 }
 
 //=======================================================================
@@ -875,11 +873,11 @@ Standard_Boolean AIS_InteractiveContext::IsDisplayed (const Handle(AIS_Interacti
 //function : DisplayPriority
 //purpose  :
 //=======================================================================
-Standard_Integer AIS_InteractiveContext::DisplayPriority (const Handle(AIS_InteractiveObject)& theIObj) const
+Graphic3d_DisplayPriority AIS_InteractiveContext::DisplayPriority (const Handle(AIS_InteractiveObject)& theIObj) const
 {
   if (theIObj.IsNull())
   {
-    return -1;
+    return Graphic3d_DisplayPriority_INVALID;
   }
 
   const Handle(AIS_GlobalStatus)* aStatus = myObjects.Seek (theIObj);
@@ -894,7 +892,7 @@ Standard_Integer AIS_InteractiveContext::DisplayPriority (const Handle(AIS_Inter
                                 : 0);
     return myMainPM->DisplayPriority (theIObj, aDispMode);
   }
-  return 0;
+  return Graphic3d_DisplayPriority_INVALID;
 }
 
 //=======================================================================
@@ -902,7 +900,7 @@ Standard_Integer AIS_InteractiveContext::DisplayPriority (const Handle(AIS_Inter
 //purpose  :
 //=======================================================================
 void AIS_InteractiveContext::SetDisplayPriority (const Handle(AIS_InteractiveObject)& theIObj,
-                                                 const Standard_Integer               thePriority)
+                                                 const Graphic3d_DisplayPriority      thePriority)
 {
   if (theIObj.IsNull())
   {
@@ -1124,42 +1122,6 @@ Standard_Boolean AIS_InteractiveContext::HasLocation (const Handle(AIS_Interacti
 TopLoc_Location AIS_InteractiveContext::Location (const Handle(AIS_InteractiveObject)& theIObj) const
 {
   return theIObj->Transformation();
-}
-
-//=======================================================================
-//function : SetDeviationCoefficient
-//purpose  :
-//=======================================================================
-void AIS_InteractiveContext::SetDeviationCoefficient (const Standard_Real theCoefficient)
-{
-  myDefaultDrawer->SetDeviationCoefficient (theCoefficient);
-}
-
-//=======================================================================
-//function : SetDeviationAngle
-//purpose  :
-//=======================================================================
-void AIS_InteractiveContext::SetDeviationAngle (const Standard_Real theAngle)
-{
-  myDefaultDrawer->SetDeviationAngle (theAngle);
-}
-
-//=======================================================================
-//function : DeviationAngle
-//purpose  : Gets  deviationAngle
-//=======================================================================
-Standard_Real AIS_InteractiveContext::DeviationAngle() const
-{
-  return myDefaultDrawer->DeviationAngle();
-}
-
-//=======================================================================
-//function : DeviationCoefficient
-//purpose  :
-//=======================================================================
-Standard_Real AIS_InteractiveContext::DeviationCoefficient() const
-{
-  return myDefaultDrawer->DeviationCoefficient();
 }
 
 //=======================================================================
@@ -1899,10 +1861,9 @@ void AIS_InteractiveContext::ClearGlobal (const Handle(AIS_InteractiveObject)& t
   theIObj->ErasePresentations (true); // make sure highlighting presentations are properly erased
 
   // Object removes from Detected sequence
-  Standard_DISABLE_DEPRECATION_WARNINGS
   for (Standard_Integer aDetIter = myDetectedSeq.Lower(); aDetIter <= myDetectedSeq.Upper();)
   {
-    Handle(SelectMgr_EntityOwner) aPicked = myMainSel->Picked (myDetectedSeq (aDetIter));
+    Handle(SelectMgr_EntityOwner) aPicked = MainSelector()->Picked (myDetectedSeq (aDetIter));
     Handle(AIS_InteractiveObject) anObj;
     if (!aPicked.IsNull())
     {
@@ -1927,19 +1888,14 @@ void AIS_InteractiveContext::ClearGlobal (const Handle(AIS_InteractiveObject)& t
       aDetIter++;
     }
   }
-  Standard_ENABLE_DEPRECATION_WARNINGS
 
   // remove IO from the selection manager to avoid memory leaks
   const Handle(SelectMgr_SelectableObject)& anObj = theIObj; // to avoid ambiguity
   mgrSelector->Remove (anObj);
 
   setObjectStatus (theIObj, PrsMgr_DisplayStatus_None, -1, -1);
+  theIObj->ViewAffinity()->SetVisible (true); // reset view affinity mask
   myMainVwr->StructureManager()->UnregisterObject (theIObj);
-
-  for (V3d_ListOfViewIterator aDefViewIter (myMainVwr->DefinedViewIterator()); aDefViewIter.More(); aDefViewIter.Next())
-  {
-    aDefViewIter.Value()->View()->ChangeHiddenObjects()->Remove (theIObj.get());
-  }
 
   if (!myLastPicked.IsNull())
   {
@@ -2006,57 +1962,12 @@ Standard_Boolean AIS_InteractiveContext::ClearDetected (Standard_Boolean theToRe
     clearDynamicHighlight();
   }
   myLastPicked.Nullify();
-  myMainSel->ClearPicked();
+  MainSelector()->ClearPicked();
   if (toUpdate && theToRedrawImmediate)
   {
     myMainVwr->RedrawImmediate();
   }
   return toUpdate;
-}
-
-//=======================================================================
-//function : DrawHiddenLine
-//purpose  :
-//=======================================================================
-Standard_Boolean AIS_InteractiveContext::DrawHiddenLine() const
-{
-  return myDefaultDrawer->DrawHiddenLine();
-}
-
-//=======================================================================
-//function : EnableDrawHiddenLine
-//purpose  :
-//=======================================================================
-void AIS_InteractiveContext::EnableDrawHiddenLine() const
-{
-  myDefaultDrawer->EnableDrawHiddenLine();
-}
-
-//=======================================================================
-//function : DisableDrawHiddenLine 
-//purpose  :
-//=======================================================================
-void AIS_InteractiveContext::DisableDrawHiddenLine() const
-{
-  myDefaultDrawer->DisableDrawHiddenLine();
-}
-
-//=======================================================================
-//function : HiddenLineAspect
-//purpose  :
-//=======================================================================
-Handle (Prs3d_LineAspect) AIS_InteractiveContext::HiddenLineAspect() const
-{
-  return myDefaultDrawer->HiddenLineAspect();
-}
-
-//=======================================================================
-//function : SetHiddenLineAspect
-//purpose  :
-//=======================================================================
-void AIS_InteractiveContext::SetHiddenLineAspect (const Handle(Prs3d_LineAspect)& theAspect) const
-{
-  myDefaultDrawer->SetHiddenLineAspect (theAspect);
 }
 
 //=======================================================================
@@ -2099,48 +2010,12 @@ Standard_Integer AIS_InteractiveContext::IsoNumber (const AIS_TypeOfIso theType)
 }
 
 //=======================================================================
-//function : IsoOnPlane
-//purpose  :
-//=======================================================================
-void AIS_InteractiveContext::IsoOnPlane (const Standard_Boolean theToSwitchOn)
-{
-  myDefaultDrawer->SetIsoOnPlane (theToSwitchOn);
-}
-
-//=======================================================================
-//function : IsoOnPlane
-//purpose  :
-//=======================================================================
-Standard_Boolean AIS_InteractiveContext::IsoOnPlane() const
-{
-  return myDefaultDrawer->IsoOnPlane();
-}
-
-//=======================================================================
-//function : IsoOnTriangulation
-//purpose  :
-//=======================================================================
-void AIS_InteractiveContext::IsoOnTriangulation (const Standard_Boolean theToSwitchOn)
-{
-  myDefaultDrawer->SetIsoOnTriangulation (theToSwitchOn);
-}
-
-//=======================================================================
-//function : IsoOnTriangulation
-//purpose  :
-//=======================================================================
-Standard_Boolean AIS_InteractiveContext::IsoOnTriangulation() const
-{
-  return myDefaultDrawer->IsoOnTriangulation();
-}
-
-//=======================================================================
 //function : SetPixelTolerance
 //purpose  :
 //=======================================================================
 void AIS_InteractiveContext::SetPixelTolerance (const Standard_Integer thePrecision)
 {
-  myMainSel->SetPixelTolerance (thePrecision);
+  MainSelector()->SetPixelTolerance (thePrecision);
 }
 
 //=======================================================================
@@ -2149,7 +2024,7 @@ void AIS_InteractiveContext::SetPixelTolerance (const Standard_Integer thePrecis
 //=======================================================================
 Standard_Integer AIS_InteractiveContext::PixelTolerance() const
 {
-  return myMainSel->PixelTolerance();
+  return MainSelector()->PixelTolerance();
 }
 
 //=======================================================================
@@ -2281,7 +2156,7 @@ Graphic3d_ZLayerId AIS_InteractiveContext::GetZLayer (const Handle(AIS_Interacti
 //=======================================================================
 void AIS_InteractiveContext::RebuildSelectionStructs()
 {
-  myMainSel->RebuildObjectsTree (Standard_True);
+  MainSelector()->RebuildObjectsTree (Standard_True);
 }
 
 //=======================================================================
@@ -2329,15 +2204,23 @@ void AIS_InteractiveContext::FitSelected (const Handle(V3d_View)& theView)
 //function : BoundingBoxOfSelection
 //purpose  :
 //=======================================================================
-Bnd_Box AIS_InteractiveContext::BoundingBoxOfSelection() const
+Bnd_Box AIS_InteractiveContext::BoundingBoxOfSelection (const Handle(V3d_View)& theView) const
 {
   Bnd_Box aBndSelected;
   AIS_MapOfObjectOwners anObjectOwnerMap;
+  const Standard_Integer aViewId = !theView.IsNull() ? theView->View()->Identification() : -1;
   for (AIS_NListOfEntityOwner::Iterator aSelIter (mySelection->Objects()); aSelIter.More(); aSelIter.Next())
   {
     const Handle(SelectMgr_EntityOwner)& anOwner = aSelIter.Value();
     Handle(AIS_InteractiveObject) anObj = Handle(AIS_InteractiveObject)::DownCast(anOwner->Selectable());
     if (anObj->IsInfinite())
+    {
+      continue;
+    }
+
+    Handle(Graphic3d_ViewAffinity) anAffinity = anObj->ViewAffinity();
+    const Standard_Boolean isVisible = aViewId == -1 || anAffinity->IsVisible (aViewId);
+    if (!isVisible)
     {
       continue;
     }
@@ -2379,7 +2262,7 @@ void AIS_InteractiveContext::FitSelected (const Handle(V3d_View)& theView,
                                           const Standard_Real theMargin,
                                           const Standard_Boolean theToUpdate)
 {
-  Bnd_Box aBndSelected = BoundingBoxOfSelection();
+  Bnd_Box aBndSelected = BoundingBoxOfSelection (theView);
   if (!aBndSelected.IsVoid())
   {
     theView->FitAll (aBndSelected, theMargin, theToUpdate);
@@ -2417,6 +2300,33 @@ void AIS_InteractiveContext::SetTransformPersistence (const Handle(AIS_Interacti
 gp_Pnt AIS_InteractiveContext::GravityPoint (const Handle(V3d_View)& theView) const
 {
   return theView->GravityPoint();
+}
+
+//=======================================================================
+//function : setContextToObject
+//purpose  :
+//=======================================================================
+void AIS_InteractiveContext::setContextToObject (const Handle(AIS_InteractiveObject)& theObj)
+{
+  if (theObj->HasInteractiveContext())
+  {
+    if (theObj->myCTXPtr != this)
+    {
+      throw Standard_ProgramError("AIS_InteractiveContext - object has been already displayed in another context!");
+    }
+  }
+  else
+  {
+    theObj->SetContext (this);
+  }
+
+  for (PrsMgr_ListOfPresentableObjectsIter aPrsIter (theObj->Children()); aPrsIter.More(); aPrsIter.Next())
+  {
+    if (Handle(AIS_InteractiveObject) aChild = Handle(AIS_InteractiveObject)::DownCast (aPrsIter.Value()))
+    {
+      setContextToObject (aChild);
+    }
+  }
 }
 
 //=======================================================================
@@ -2730,7 +2640,7 @@ AIS_StatusOfDetection AIS_InteractiveContext::MoveTo (const Standard_Integer  th
   {
     throw Standard_ProgramError ("AIS_InteractiveContext::MoveTo() - invalid argument");
   }
-  myMainSel->Pick (theXPix, theYPix, theView);
+  MainSelector()->Pick (theXPix, theYPix, theView);
   return moveTo (theView, theToRedrawOnUpdate);
 }
 
@@ -2746,7 +2656,7 @@ AIS_StatusOfDetection AIS_InteractiveContext::MoveTo (const gp_Ax1& theAxis,
   {
     throw Standard_ProgramError ("AIS_InteractiveContext::MoveTo() - invalid argument");
   }
-  myMainSel->Pick (theAxis, theView);
+  MainSelector()->Pick (theAxis, theView);
   return moveTo (theView, theToRedrawOnUpdate);
 }
 
@@ -2762,20 +2672,18 @@ AIS_StatusOfDetection AIS_InteractiveContext::moveTo (const Handle(V3d_View)& th
   myDetectedSeq.Clear();
   myLastActiveView = theView.get();
 
-  // preliminaires
+  // preliminaries
   AIS_StatusOfDetection aStatus        = AIS_SOD_Nothing;
   Standard_Boolean      toUpdateViewer = Standard_False;
 
-  myFilters->SetDisabledObjects (theView->View()->HiddenObjects());
-
   // filling of myAISDetectedSeq sequence storing information about detected AIS objects
   // (the objects must be AIS_Shapes)
-  const Standard_Integer aDetectedNb = myMainSel->NbPicked();
+  const Standard_Integer aDetectedNb = MainSelector()->NbPicked();
   Standard_Integer aNewDetected = 0;
   Standard_Boolean toIgnoreDetTop = Standard_False;
   for (Standard_Integer aDetIter = 1; aDetIter <= aDetectedNb; ++aDetIter)
   {
-    Handle(SelectMgr_EntityOwner) anOwner = myMainSel->Picked (aDetIter);
+    Handle(SelectMgr_EntityOwner) anOwner = MainSelector()->Picked (aDetIter);
     if (anOwner.IsNull()
      || !myFilters->IsOk (anOwner))
     {
@@ -2805,7 +2713,7 @@ AIS_StatusOfDetection AIS_InteractiveContext::moveTo (const Handle(V3d_View)& th
     // selection in current selection mode. It is necessary to check the current detected
     // entity and hilight it only if the detected entity is not the same as
     // previous detected (IsForcedHilight call)
-    Handle(SelectMgr_EntityOwner) aNewPickedOwner = myMainSel->Picked (aNewDetected);
+    Handle(SelectMgr_EntityOwner) aNewPickedOwner = MainSelector()->Picked (aNewDetected);
     if (aNewPickedOwner == myLastPicked && !aNewPickedOwner->IsForcedHilight())
     {
       return myLastPicked->IsSelected()
@@ -2926,15 +2834,15 @@ AIS_StatusOfPick AIS_InteractiveContext::SelectRectangle (const Graphic3d_Vec2i&
   }
 
   myLastActiveView = theView.get();
-  myMainSel->Pick (thePntMin.x(), thePntMin.y(), thePntMax.x(), thePntMax.y(), theView);
+  MainSelector()->Pick (thePntMin.x(), thePntMin.y(), thePntMax.x(), thePntMax.y(), theView);
 
   AIS_NArray1OfEntityOwner aPickedOwners;
-  if (myMainSel->NbPicked() > 0)
+  if (MainSelector()->NbPicked() > 0)
   {
-    aPickedOwners.Resize (1, myMainSel->NbPicked(), false);
-    for (Standard_Integer aPickIter = 1; aPickIter <= myMainSel->NbPicked(); ++aPickIter)
+    aPickedOwners.Resize (1, MainSelector()->NbPicked(), false);
+    for (Standard_Integer aPickIter = 1; aPickIter <= MainSelector()->NbPicked(); ++aPickIter)
     {
-      aPickedOwners.SetValue (aPickIter, myMainSel->Picked (aPickIter));
+      aPickedOwners.SetValue (aPickIter, MainSelector()->Picked (aPickIter));
     }
   }
 
@@ -2955,15 +2863,15 @@ AIS_StatusOfPick AIS_InteractiveContext::SelectPolygon (const TColgp_Array1OfPnt
   }
 
   myLastActiveView = theView.get();
-  myMainSel->Pick (thePolyline, theView);
+  MainSelector()->Pick (thePolyline, theView);
 
   AIS_NArray1OfEntityOwner aPickedOwners;
-  if (myMainSel->NbPicked() > 0)
+  if (MainSelector()->NbPicked() > 0)
   {
-    aPickedOwners.Resize (1, myMainSel->NbPicked(), false);
-    for (Standard_Integer aPickIter = 1; aPickIter <= myMainSel->NbPicked(); ++aPickIter)
+    aPickedOwners.Resize (1, MainSelector()->NbPicked(), false);
+    for (Standard_Integer aPickIter = 1; aPickIter <= MainSelector()->NbPicked(); ++aPickIter)
     {
-      aPickedOwners.SetValue (aPickIter, myMainSel->Picked (aPickIter));
+      aPickedOwners.SetValue (aPickIter, MainSelector()->Picked (aPickIter));
     }
   }
 
@@ -2984,15 +2892,15 @@ AIS_StatusOfPick AIS_InteractiveContext::SelectPoint (const Graphic3d_Vec2i&    
   }
 
   myLastActiveView = theView.get();
-  myMainSel->Pick (thePnt.x(), thePnt.y(), theView);
+  MainSelector()->Pick (thePnt.x(), thePnt.y(), theView);
 
   AIS_NArray1OfEntityOwner aPickedOwners;
-  if (myMainSel->NbPicked() > 0)
+  if (MainSelector()->NbPicked() > 0)
   {
-    aPickedOwners.Resize (1, myMainSel->NbPicked(), false);
-    for (Standard_Integer aPickIter = 1; aPickIter <= myMainSel->NbPicked(); ++aPickIter)
+    aPickedOwners.Resize (1, MainSelector()->NbPicked(), false);
+    for (Standard_Integer aPickIter = 1; aPickIter <= MainSelector()->NbPicked(); ++aPickIter)
     {
-      aPickedOwners.SetValue (aPickIter, myMainSel->Picked (aPickIter));
+      aPickedOwners.SetValue (aPickIter, MainSelector()->Picked (aPickIter));
     }
   }
 
@@ -3008,7 +2916,7 @@ AIS_StatusOfPick AIS_InteractiveContext::SelectDetected (const AIS_SelectionSche
   if (theSelScheme == AIS_SelectionScheme_Replace && !myLastPicked.IsNull())
   {
     Graphic3d_Vec2i aMousePos (-1, -1);
-    gp_Pnt2d aMouseRealPos = myMainSel->GetManager().GetMousePosition();
+    gp_Pnt2d aMouseRealPos = MainSelector()->GetManager().GetMousePosition();
     if (!Precision::IsInfinite (aMouseRealPos.X()) &&
         !Precision::IsInfinite (aMouseRealPos.Y()))
     {
@@ -3147,7 +3055,7 @@ AIS_StatusOfPick AIS_InteractiveContext::Select (const AIS_NArray1OfEntityOwner&
     }
   }
 
-  mySelection->SelectOwners (theOwners, theSelScheme, myMainSel->GetManager().IsOverlapAllowed(), myFilters);
+  mySelection->SelectOwners (theOwners, theSelScheme, MainSelector()->GetManager().IsOverlapAllowed(), myFilters);
 
   if (myAutoHilight)
   {
@@ -3729,7 +3637,7 @@ Standard_Integer AIS_InteractiveContext::HilightNextDetected (const Handle(V3d_V
   {
     myCurHighlighted = myDetectedSeq.Lower();
   }
-  const Handle(SelectMgr_EntityOwner)& anOwner = myMainSel->Picked (myDetectedSeq (myCurHighlighted));
+  const Handle(SelectMgr_EntityOwner)& anOwner = MainSelector()->Picked (myDetectedSeq (myCurHighlighted));
   if (anOwner.IsNull())
   {
     return 0;
@@ -3764,7 +3672,7 @@ Standard_Integer AIS_InteractiveContext::HilightPreviousDetected (const Handle(V
   {
     myCurHighlighted = myDetectedSeq.Upper();
   }
-  const Handle(SelectMgr_EntityOwner)& anOwner = myMainSel->Picked (myDetectedSeq (myCurHighlighted));
+  const Handle(SelectMgr_EntityOwner)& anOwner = MainSelector()->Picked (myDetectedSeq (myCurHighlighted));
   if (anOwner.IsNull())
   {
     return 0;
@@ -3789,7 +3697,7 @@ Standard_Integer AIS_InteractiveContext::HilightPreviousDetected (const Handle(V
 Handle(SelectMgr_EntityOwner) AIS_InteractiveContext::DetectedCurrentOwner() const
 {
   return MoreDetected()
-       ? myMainSel->Picked (myDetectedSeq (myCurDetected))
+       ? MainSelector()->Picked (myDetectedSeq (myCurDetected))
        : Handle(SelectMgr_EntityOwner)();
 }
 
@@ -3816,7 +3724,7 @@ const TopoDS_Shape& AIS_InteractiveContext::DetectedCurrentShape() const
 Handle(AIS_InteractiveObject) AIS_InteractiveContext::DetectedCurrentObject() const
 {
   return MoreDetected()
-       ? Handle(AIS_InteractiveObject)::DownCast (myMainSel->Picked (myDetectedSeq (myCurDetected))->Selectable())
+       ? Handle(AIS_InteractiveObject)::DownCast (MainSelector()->Picked (myDetectedSeq (myCurDetected))->Selectable())
        : Handle(AIS_InteractiveObject)();
 }
 
@@ -4047,7 +3955,7 @@ void AIS_InteractiveContext::SubIntensityOff (const Handle(AIS_InteractiveObject
 //=======================================================================
 void AIS_InteractiveContext::DisplayActiveSensitive(const Handle(V3d_View)& theView)
 {
-  myMainSel->DisplaySensitive (theView);
+  MainSelector()->DisplaySensitive (theView);
 }
 
 //=======================================================================
@@ -4066,7 +3974,7 @@ void AIS_InteractiveContext::DisplayActiveSensitive (const Handle(AIS_Interactiv
   for (TColStd_ListIteratorOfListOfInteger aModeIter ((*aStatus)->SelectionModes()); aModeIter.More(); aModeIter.Next())
   {
     const Handle(SelectMgr_Selection)& aSel = theObj->Selection (aModeIter.Value());
-    myMainSel->DisplaySensitive (aSel, theObj->Transformation(), theView, Standard_False);
+    MainSelector()->DisplaySensitive (aSel, theObj->Transformation(), theView, Standard_False);
   }
 }
 
@@ -4076,7 +3984,7 @@ void AIS_InteractiveContext::DisplayActiveSensitive (const Handle(AIS_Interactiv
 //=======================================================================
 void AIS_InteractiveContext::ClearActiveSensitive (const Handle(V3d_View)& theView)
 {
-  myMainSel->ClearSensitive (theView);
+  MainSelector()->ClearSensitive (theView);
 }
 
 //=======================================================================
@@ -4208,7 +4116,6 @@ void AIS_InteractiveContext::DumpJson (Standard_OStream& theOStream, Standard_In
   OCCT_DUMP_FIELD_VALUE_POINTER (theOStream, mgrSelector.get())
   OCCT_DUMP_FIELD_VALUE_POINTER (theOStream, myMainPM.get())
   OCCT_DUMP_FIELD_VALUE_POINTER (theOStream, myMainVwr.get())
-  OCCT_DUMP_FIELD_VALUE_POINTER (theOStream, myMainSel.get())
   OCCT_DUMP_FIELD_VALUE_POINTER (theOStream, myLastActiveView)
 
   OCCT_DUMP_FIELD_VALUE_POINTER (theOStream, myLastPicked.get())

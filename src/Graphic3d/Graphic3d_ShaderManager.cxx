@@ -15,6 +15,7 @@
 
 #include <Graphic3d_LightSet.hxx>
 #include <Graphic3d_ShaderProgram.hxx>
+#include <Graphic3d_TextureSetBits.hxx>
 #include <Message.hxx>
 
 #include "../Shaders/Shaders_DirectionalLightShadow_glsl.pxx"
@@ -32,6 +33,7 @@
 #include "../Shaders/Shaders_PhongPointLight_glsl.pxx"
 #include "../Shaders/Shaders_PhongSpotLight_glsl.pxx"
 #include "../Shaders/Shaders_PointLightAttenuation_glsl.pxx"
+#include "../Shaders/Shaders_SkydomBackground_fs.pxx"
 #include "../Shaders/Shaders_TangentSpaceNormal_glsl.pxx"
 
 IMPLEMENT_STANDARD_RTTIEXT(Graphic3d_ShaderManager, Standard_Transient)
@@ -1168,7 +1170,7 @@ TCollection_AsciiString Graphic3d_ShaderManager::stdComputeLighting (Standard_In
         for (Graphic3d_LightSet::Iterator aLightIter (theLights, Graphic3d_LightSet::IterationFilter_ExcludeDisabledAndAmbient);
              aLightIter.More(); aLightIter.Next())
         {
-          if (aLightIter.Value()->Type() == Graphic3d_TOLS_DIRECTIONAL
+          if (aLightIter.Value()->Type() == Graphic3d_TypeOfLightSource_Directional
            && aLightIter.Value()->ToCastShadows())
           {
             aLightsLoop = aLightsLoop + EOL"    occDirectionalLight (" + anIndex + ", theNormal, theView, theIsFront,"
@@ -1182,11 +1184,11 @@ TCollection_AsciiString Graphic3d_ShaderManager::stdComputeLighting (Standard_In
       {
         switch (aLightIter.Value()->Type())
         {
-          case Graphic3d_TOLS_AMBIENT:
+          case Graphic3d_TypeOfLightSource_Ambient:
           {
             break; // skip ambient
           }
-          case Graphic3d_TOLS_DIRECTIONAL:
+          case Graphic3d_TypeOfLightSource_Directional:
           {
             if (theNbShadowMaps > 0
              && aLightIter.Value()->ToCastShadows())
@@ -1197,13 +1199,13 @@ TCollection_AsciiString Graphic3d_ShaderManager::stdComputeLighting (Standard_In
             ++anIndex;
             break;
           }
-          case Graphic3d_TOLS_POSITIONAL:
+          case Graphic3d_TypeOfLightSource_Positional:
           {
             aLightsLoop = aLightsLoop + EOL"    occPointLight (" + anIndex + ", theNormal, theView, aPoint, theIsFront);";
             ++anIndex;
             break;
           }
-          case Graphic3d_TOLS_SPOT:
+          case Graphic3d_TypeOfLightSource_Spot:
           {
             aLightsLoop = aLightsLoop + EOL"    occSpotLight (" + anIndex + ", theNormal, theView, aPoint, theIsFront);";
             ++anIndex;
@@ -1220,7 +1222,7 @@ TCollection_AsciiString Graphic3d_ShaderManager::stdComputeLighting (Standard_In
         EOL"    for (int anIndex = 0; anIndex < occLightSourcesCount; ++anIndex)"
         EOL"    {"
         EOL"      int aType = occLight_Type (anIndex);";
-      if (theLights->NbEnabledLightsOfType (Graphic3d_TOLS_DIRECTIONAL) > 0)
+      if (theLights->NbEnabledLightsOfType (Graphic3d_TypeOfLightSource_Directional) > 0)
       {
         isFirstInLoop = false;
         aLightsLoop +=
@@ -1229,7 +1231,7 @@ TCollection_AsciiString Graphic3d_ShaderManager::stdComputeLighting (Standard_In
           EOL"        occDirectionalLight (anIndex, theNormal, theView, theIsFront, 1.0);"
           EOL"      }";
       }
-      if (theLights->NbEnabledLightsOfType (Graphic3d_TOLS_POSITIONAL) > 0)
+      if (theLights->NbEnabledLightsOfType (Graphic3d_TypeOfLightSource_Positional) > 0)
       {
         if (!isFirstInLoop)
         {
@@ -1242,7 +1244,7 @@ TCollection_AsciiString Graphic3d_ShaderManager::stdComputeLighting (Standard_In
           EOL"        occPointLight (anIndex, theNormal, theView, aPoint, theIsFront);"
           EOL"      }";
       }
-      if (theLights->NbEnabledLightsOfType (Graphic3d_TOLS_SPOT) > 0)
+      if (theLights->NbEnabledLightsOfType (Graphic3d_TypeOfLightSource_Spot) > 0)
       {
         if (!isFirstInLoop)
         {
@@ -1267,7 +1269,7 @@ TCollection_AsciiString Graphic3d_ShaderManager::stdComputeLighting (Standard_In
       aLightsFunc += Shaders_PBRIllumination_glsl;
     }
 
-    if (theLights->NbEnabledLightsOfType (Graphic3d_TOLS_DIRECTIONAL) == 1
+    if (theLights->NbEnabledLightsOfType (Graphic3d_TypeOfLightSource_Directional) == 1
      && theNbLights == 1
      && !theIsPBR
      && theNbShadowMaps == 0)
@@ -1276,7 +1278,7 @@ TCollection_AsciiString Graphic3d_ShaderManager::stdComputeLighting (Standard_In
       aLightsLoop = EOL"    directionalLightFirst(theNormal, theView, theIsFront, 1.0);";
       aLightsFunc += THE_FUNC_directionalLightFirst;
     }
-    else if (theLights->NbEnabledLightsOfType (Graphic3d_TOLS_DIRECTIONAL) > 0)
+    else if (theLights->NbEnabledLightsOfType (Graphic3d_TypeOfLightSource_Directional) > 0)
     {
       if (theNbShadowMaps > 0)
       {
@@ -1284,11 +1286,11 @@ TCollection_AsciiString Graphic3d_ShaderManager::stdComputeLighting (Standard_In
       }
       aLightsFunc += theIsPBR ? Shaders_PBRDirectionalLight_glsl : Shaders_PhongDirectionalLight_glsl;
     }
-    if (theLights->NbEnabledLightsOfType (Graphic3d_TOLS_POSITIONAL) > 0)
+    if (theLights->NbEnabledLightsOfType (Graphic3d_TypeOfLightSource_Positional) > 0)
     {
       aLightsFunc += theIsPBR ? Shaders_PBRPointLight_glsl : Shaders_PhongPointLight_glsl;
     }
-    if (theLights->NbEnabledLightsOfType (Graphic3d_TOLS_SPOT) > 0)
+    if (theLights->NbEnabledLightsOfType (Graphic3d_TypeOfLightSource_Spot) > 0)
     {
       aLightsFunc += theIsPBR ? Shaders_PBRSpotLight_glsl : Shaders_PhongSpotLight_glsl;
     }
@@ -1799,11 +1801,14 @@ Handle(Graphic3d_ShaderProgram) Graphic3d_ShaderManager::getStdProgramStereo (Gr
     case Graphic3d_StereoMode_RowInterlaced:
     {
       aName = "row-interlaced";
+      aUniforms.Append (Graphic3d_ShaderObject::ShaderVariable ("vec2 uTexOffset", Graphic3d_TOS_FRAGMENT));
       aSrcFrag =
           EOL"void main()"
           EOL"{"
-          EOL"  vec4 aColorL = occTexture2D (uLeftSampler,  TexCoord);"
-          EOL"  vec4 aColorR = occTexture2D (uRightSampler, TexCoord);"
+          EOL"  vec2 aTexCoordL = TexCoord - uTexOffset;"
+          EOL"  vec2 aTexCoordR = TexCoord + uTexOffset;"
+          EOL"  vec4 aColorL = occTexture2D (uLeftSampler,  aTexCoordL);"
+          EOL"  vec4 aColorR = occTexture2D (uRightSampler, aTexCoordR);"
           EOL"  if (int (mod (gl_FragCoord.y - 1023.5, 2.0)) != 1)"
           EOL"  {"
           EOL"    occSetFragColor (aColorL);"
@@ -1818,11 +1823,14 @@ Handle(Graphic3d_ShaderProgram) Graphic3d_ShaderManager::getStdProgramStereo (Gr
     case Graphic3d_StereoMode_ColumnInterlaced:
     {
       aName = "column-interlaced";
+      aUniforms.Append (Graphic3d_ShaderObject::ShaderVariable ("vec2 uTexOffset", Graphic3d_TOS_FRAGMENT));
       aSrcFrag =
           EOL"void main()"
           EOL"{"
-          EOL"  vec4 aColorL = occTexture2D (uLeftSampler,  TexCoord);"
-          EOL"  vec4 aColorR = occTexture2D (uRightSampler, TexCoord);"
+          EOL"  vec2 aTexCoordL = TexCoord - uTexOffset;"
+          EOL"  vec2 aTexCoordR = TexCoord + uTexOffset;"
+          EOL"  vec4 aColorL = occTexture2D (uLeftSampler,  aTexCoordL);"
+          EOL"  vec4 aColorR = occTexture2D (uRightSampler, aTexCoordR);"
           EOL"  if (int (mod (gl_FragCoord.x - 1023.5, 2.0)) == 1)"
           EOL"  {"
           EOL"    occSetFragColor (aColorL);"
@@ -1837,11 +1845,14 @@ Handle(Graphic3d_ShaderProgram) Graphic3d_ShaderManager::getStdProgramStereo (Gr
     case Graphic3d_StereoMode_ChessBoard:
     {
       aName = "chessboard";
+      aUniforms.Append (Graphic3d_ShaderObject::ShaderVariable ("vec2 uTexOffset", Graphic3d_TOS_FRAGMENT));
       aSrcFrag =
           EOL"void main()"
           EOL"{"
-          EOL"  vec4 aColorL = occTexture2D (uLeftSampler,  TexCoord);"
-          EOL"  vec4 aColorR = occTexture2D (uRightSampler, TexCoord);"
+          EOL"  vec2 aTexCoordL = TexCoord - uTexOffset;"
+          EOL"  vec2 aTexCoordR = TexCoord + uTexOffset;"
+          EOL"  vec4 aColorL = occTexture2D (uLeftSampler,  aTexCoordL);"
+          EOL"  vec4 aColorR = occTexture2D (uRightSampler, aTexCoordR);"
           EOL"  bool isEvenX = int(mod(floor(gl_FragCoord.x - 1023.5), 2.0)) != 1;"
           EOL"  bool isEvenY = int(mod(floor(gl_FragCoord.y - 1023.5), 2.0)) == 1;"
           EOL"  if ((isEvenX && isEvenY) || (!isEvenX && !isEvenY))"
@@ -2091,5 +2102,76 @@ Handle(Graphic3d_ShaderProgram) Graphic3d_ShaderManager::getBgCubeMapProgram() c
   aProgSrc->SetNbClipPlanesMax (0);
   aProgSrc->AttachShader (Graphic3d_ShaderObject::CreateFromSource (aSrcVert, Graphic3d_TOS_VERTEX,   aUniforms, aStageInOuts));
   aProgSrc->AttachShader (Graphic3d_ShaderObject::CreateFromSource (aSrcFrag, Graphic3d_TOS_FRAGMENT, aUniforms, aStageInOuts));
+  return aProgSrc;
+}
+
+// =======================================================================
+// function : getBgSkydomeProgram
+// purpose  :
+// =======================================================================
+Handle(Graphic3d_ShaderProgram) Graphic3d_ShaderManager::getBgSkydomeProgram() const
+{
+  Handle(Graphic3d_ShaderProgram) aProgSrc = new Graphic3d_ShaderProgram();
+
+  Graphic3d_ShaderObject::ShaderVariableList aUniforms, aStageInOuts;
+  aStageInOuts.Append (Graphic3d_ShaderObject::ShaderVariable ("vec2 TexCoord", Graphic3d_TOS_VERTEX | Graphic3d_TOS_FRAGMENT));
+
+  TCollection_AsciiString aSrcVert = TCollection_AsciiString()
+  + EOL"void main()"
+    EOL"{"
+    EOL"  gl_Position = vec4 (occVertex.xy, 0.0, 1.0);"
+    EOL"  TexCoord    = 0.5 * gl_Position.xy + vec2 (0.5);"
+    EOL"}";
+
+  TCollection_AsciiString aSrcFrag = Shaders_SkydomBackground_fs;
+
+  if (myGapi == Aspect_GraphicsLibrary_OpenGL)
+  {
+    aProgSrc->SetHeader ("#version 130");
+  }
+  else if (myGapi == Aspect_GraphicsLibrary_OpenGLES)
+  {
+    if (IsGapiGreaterEqual (3, 0))
+    {
+      aProgSrc->SetHeader ("#version 300 es");
+    }
+  }
+  aProgSrc->AttachShader (Graphic3d_ShaderObject::CreateFromSource (aSrcVert, Graphic3d_TOS_VERTEX, aUniforms, aStageInOuts));
+  aProgSrc->AttachShader (Graphic3d_ShaderObject::CreateFromSource (aSrcFrag, Graphic3d_TOS_FRAGMENT, aUniforms, aStageInOuts));
+
+  return aProgSrc;
+}
+
+// =======================================================================
+// function : getColoredQuadProgram
+// purpose  :
+// =======================================================================
+Handle(Graphic3d_ShaderProgram) Graphic3d_ShaderManager::getColoredQuadProgram() const
+{
+  Handle(Graphic3d_ShaderProgram) aProgSrc = new Graphic3d_ShaderProgram();
+
+  Graphic3d_ShaderObject::ShaderVariableList aUniforms, aStageInOuts;
+  aStageInOuts.Append (Graphic3d_ShaderObject::ShaderVariable ("vec2 TexCoord", Graphic3d_TOS_VERTEX | Graphic3d_TOS_FRAGMENT));
+  aUniforms.Append (Graphic3d_ShaderObject::ShaderVariable ("vec3 uColor1", Graphic3d_TOS_FRAGMENT));
+  aUniforms.Append (Graphic3d_ShaderObject::ShaderVariable ("vec3 uColor2", Graphic3d_TOS_FRAGMENT));
+
+  TCollection_AsciiString aSrcVert = TCollection_AsciiString()
+  + EOL"void main()"
+    EOL"{"
+    EOL"  TexCoord    = occTexCoord.st;"
+    EOL"  gl_Position = occProjectionMatrix * occWorldViewMatrix * occModelWorldMatrix * occVertex;"
+    EOL"}";
+
+  TCollection_AsciiString aSrcFrag = TCollection_AsciiString()
+  + EOL"void main()"
+    EOL"{"
+    EOL"  vec3 c1 = mix (uColor1, uColor2, TexCoord.x);"
+    EOL"  occSetFragColor (vec4 (mix (uColor2, c1, TexCoord.y), 1.0));"
+    EOL"}";
+
+  defaultGlslVersion (aProgSrc, "colored_quad", 0);
+  aProgSrc->AttachShader (Graphic3d_ShaderObject::CreateFromSource (aSrcVert, Graphic3d_TOS_VERTEX,   aUniforms, aStageInOuts));
+  aProgSrc->AttachShader (Graphic3d_ShaderObject::CreateFromSource (aSrcFrag, Graphic3d_TOS_FRAGMENT, aUniforms, aStageInOuts));
+
   return aProgSrc;
 }

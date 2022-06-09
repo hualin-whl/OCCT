@@ -26,13 +26,10 @@
 #include <TopoDS_Edge.hxx>
 #include <TopoDS_Face.hxx>
 #include <Geom2dAdaptor_Curve.hxx>
-#include <Standard_Boolean.hxx>
 #include <Standard_Integer.hxx>
 #include <GeomAbs_Shape.hxx>
 #include <Standard_Real.hxx>
 
-class Standard_DomainError;
-class TopoDS_Face;
 class TopoDS_Edge;
 class Geom2d_Curve;
 class Geom_Curve;

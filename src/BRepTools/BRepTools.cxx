@@ -14,58 +14,45 @@
 // Alternatively, this file may be used under the terms of Open CASCADE
 // commercial license or contractual agreement.
 
+#include <BRepTools.hxx>
 
+#include <Adaptor3d_CurveOnSurface.hxx>
 #include <Bnd_Box2d.hxx>
 #include <BndLib_Add2dCurve.hxx>
-#include <BRep_Builder.hxx>
-#include <BRep_CurveRepresentation.hxx>
 #include <BRep_GCurve.hxx>
-#include <BRep_ListOfCurveRepresentation.hxx>
 #include <BRep_TEdge.hxx>
-#include <BRep_Tool.hxx>
-#include <BRepTools.hxx>
-#include <BRepTools_MapOfVertexPnt2d.hxx>
 #include <BRepTools_ShapeSet.hxx>
 #include <BRepAdaptor_Surface.hxx>
-#include <ElCLib.hxx>
 #include <Geom2d_Curve.hxx>
 #include <Geom2dAdaptor_Curve.hxx>
+#include <GeomAdaptor_Curve.hxx>
 #include <Geom_BSplineSurface.hxx>
 #include <Geom_Curve.hxx>
 #include <Geom_RectangularTrimmedSurface.hxx>
 #include <Geom_Surface.hxx>
-#include <gp_Lin2d.hxx>
-#include <gp_Vec2d.hxx>
 #include <Message.hxx>
 #include <OSD_FileSystem.hxx>
-#include <OSD_OpenFile.hxx>
 #include <Poly_PolygonOnTriangulation.hxx>
 #include <Poly_Triangulation.hxx>
 #include <Precision.hxx>
-#include <Standard_ErrorHandler.hxx>
 #include <Standard_Failure.hxx>
 #include <Standard_Stream.hxx>
-#include <TColGeom2d_SequenceOfCurve.hxx>
-#include <TColgp_SequenceOfPnt2d.hxx>
-#include <TColStd_Array1OfReal.hxx>
-#include <TColStd_HArray1OfInteger.hxx>
 #include <TColStd_MapOfTransient.hxx>
-#include <TColStd_SequenceOfReal.hxx>
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Compound.hxx>
 #include <TopoDS_CompSolid.hxx>
-#include <TopoDS_Edge.hxx>
 #include <TopoDS_Face.hxx>
 #include <TopoDS_Shape.hxx>
 #include <TopoDS_Shell.hxx>
 #include <TopoDS_Solid.hxx>
 #include <TopoDS_Vertex.hxx>
 #include <TopoDS_Wire.hxx>
-#include <TopTools_SequenceOfShape.hxx>
 #include <GeomLib_CheckCurveOnSurface.hxx>
 #include <errno.h>
+#include <BRepTools_Modifier.hxx>
+#include <TopTools_IndexedMapOfShape.hxx>
 
 
 //=======================================================================
@@ -707,12 +694,14 @@ Standard_Boolean  BRepTools::Write (const TopoDS_Shape& theShape,
                                     const TopTools_FormatVersion theVersion,
                                     const Message_ProgressRange& theProgress)
 {
-  std::ofstream os;
-  OSD_OpenStream(os, theFile, std::ios::out);
-  if (!os.is_open() || !os.good())
+  const Handle(OSD_FileSystem)& aFileSystem = OSD_FileSystem::DefaultFileSystem();
+  std::shared_ptr<std::ostream> aStream = aFileSystem->OpenOStream (theFile, std::ios::out | std::ios::binary);
+  if (aStream.get() == NULL || !aStream->good())
+  {
     return Standard_False;
+  }
 
-  Standard_Boolean isGood = (os.good() && !os.eof());
+  Standard_Boolean isGood = (aStream->good() && !aStream->eof());
   if(!isGood)
     return isGood;
 
@@ -720,19 +709,19 @@ Standard_Boolean  BRepTools::Write (const TopoDS_Shape& theShape,
   SS.SetFormatNb (theVersion);
   SS.Add (theShape);
 
-  os << "DBRep_DrawableShape\n";  // for easy Draw read
-  SS.Write(os, theProgress);
-  isGood = os.good();
+  *aStream << "DBRep_DrawableShape\n";  // for easy Draw read
+  SS.Write (*aStream, theProgress);
+  isGood = aStream->good();
   if (isGood)
   {
-    SS.Write (theShape, os);
+    SS.Write (theShape, *aStream);
   }
-  os.flush();
-  isGood = os.good();
+  aStream->flush();
+  isGood = aStream->good();
 
   errno = 0;
-  os.close();
-  isGood = os.good() && isGood && !errno;
+  isGood = aStream->good() && isGood && !errno;
+  aStream.reset();
 
   return isGood;
 }
@@ -747,15 +736,16 @@ Standard_Boolean BRepTools::Read(TopoDS_Shape& Sh,
                                  const BRep_Builder& B,
                                  const Message_ProgressRange& theProgress)
 {
-  std::filebuf fic;
-  std::istream in(&fic);
-  OSD_OpenStream (fic, File, std::ios::in);
-  if(!fic.is_open()) return Standard_False;
-  
+  const Handle(OSD_FileSystem)& aFileSystem = OSD_FileSystem::DefaultFileSystem();
+  std::shared_ptr<std::istream> aStream = aFileSystem->OpenIStream (File, std::ios::in);
+  if (aStream.get() == NULL)
+  {
+    return Standard_False;
+  }
   BRepTools_ShapeSet SS(B);
-  SS.Read(in, theProgress);
+  SS.Read (*aStream, theProgress);
   if(!SS.NbShapes()) return Standard_False;
-  SS.Read(Sh,in);
+  SS.Read (Sh,*aStream);
   return Standard_True;
 }
 
@@ -1328,9 +1318,16 @@ Standard_Real BRepTools::EvalAndUpdateTol(const TopoDS_Edge& theE,
     first = Max(first, C2d->FirstParameter());
     last = Min(last, C2d->LastParameter());
   }
+  const Handle(Adaptor3d_Curve) aGeomAdaptorCurve = new GeomAdaptor_Curve(C3d, first, last);
 
-  GeomLib_CheckCurveOnSurface CT(C3d, S, first, last);
-  CT.Perform(C2d);
+  Handle(Adaptor2d_Curve2d) aGeom2dAdaptorCurve   = new Geom2dAdaptor_Curve(C2d, first, last);
+  Handle(GeomAdaptor_Surface) aGeomAdaptorSurface = new GeomAdaptor_Surface(S);
+
+  Handle(Adaptor3d_CurveOnSurface) anAdaptor3dCurveOnSurface =
+    new Adaptor3d_CurveOnSurface(aGeom2dAdaptorCurve, aGeomAdaptorSurface);
+
+  GeomLib_CheckCurveOnSurface CT(aGeomAdaptorCurve);
+  CT.Perform(anAdaptor3dCurveOnSurface);
   if(CT.IsDone())
   {
     newtol = CT.MaxDistance();
@@ -1515,4 +1512,34 @@ void BRepTools::RemoveInternals (TopoDS_Shape& theS,
   }
 
   removeInternals (theS, pMKeep);
+}
+
+//=======================================================================
+//function : CheckLocations
+//purpose  : 
+//=======================================================================
+
+void BRepTools::CheckLocations(const TopoDS_Shape& theS,
+                               TopTools_ListOfShape& theProblemShapes)
+{
+  if (theS.IsNull()) return;
+
+  TopTools_IndexedMapOfShape aMapS;
+  TopExp::MapShapes(theS, aMapS, Standard_False, Standard_False);
+
+  Standard_Integer i;
+  for (i = 1; i <= aMapS.Extent(); ++i)
+  {
+    const TopoDS_Shape& anS = aMapS(i);
+    const TopLoc_Location& aLoc = anS.Location();
+    const gp_Trsf& aTrsf = aLoc.Transformation();
+    Standard_Boolean isBadTrsf = aTrsf.IsNegative() ||
+      (Abs(Abs(aTrsf.ScaleFactor()) - 1.) > TopLoc_Location::ScalePrec());
+
+    if (isBadTrsf)
+    {
+      theProblemShapes.Append(anS);
+    }
+  }
+
 }

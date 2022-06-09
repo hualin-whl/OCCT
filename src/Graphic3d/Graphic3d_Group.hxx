@@ -18,10 +18,7 @@
 #define _Graphic3d_Group_HeaderFile
 
 #include <Graphic3d_BndBox4f.hxx>
-#include <Graphic3d_AspectLine3d.hxx>
 #include <Graphic3d_AspectFillArea3d.hxx>
-#include <Graphic3d_AspectText3d.hxx>
-#include <Graphic3d_AspectMarker3d.hxx>
 #include <Graphic3d_MapOfAspectsToAspects.hxx>
 #include <Standard_CString.hxx>
 #include <Graphic3d_Vertex.hxx>
@@ -38,6 +35,7 @@
 class Graphic3d_Structure;
 class Graphic3d_ArrayOfPrimitives;
 class Graphic3d_Text;
+class Graphic3d_TransformPers;
 
 //! This class allows the definition of groups
 //! of primitives inside of graphic objects (presentations).
@@ -133,8 +131,11 @@ public:
   //! sets the flipping to theIsEnabled state.
   Standard_EXPORT virtual void SetFlippingOptions (const Standard_Boolean theIsEnabled, const gp_Ax2& theRefPlane) = 0;
 
-  //! Returns true if the group contains Polygons, Triangles or Quadrangles.
-  bool ContainsFacet() const { return myContainsFacet; }
+  //! Return transformation persistence.
+  const Handle(Graphic3d_TransformPers)& TransformPersistence() const { return myTrsfPers; }
+
+  //! Set transformation persistence.
+  Standard_EXPORT virtual void SetTransformPersistence (const Handle(Graphic3d_TransformPers)& theTrsfPers);
 
   //! Returns Standard_True if the group <me> is deleted.
   //! <me> is deleted after the call Remove (me) or the
@@ -290,10 +291,10 @@ protected:
 
 protected:
 
+  Handle(Graphic3d_TransformPers) myTrsfPers; //!< current transform persistence
   Graphic3d_Structure* myStructure;     //!< pointer to the parent structure
   Graphic3d_BndBox4f   myBounds;        //!< bounding box
   bool                 myIsClosed;      //!< flag indicating closed volume
-  bool                 myContainsFacet; //!< flag indicating that this group contains face primitives
 
 };
 

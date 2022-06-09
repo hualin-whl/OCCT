@@ -55,8 +55,18 @@ public:
   //! Returns center of the sphere with transformation applied
   virtual gp_Pnt CenterOfGeometry() const Standard_OVERRIDE { return myCenter; };
 
+  //! Returns the position of detected point on the sphere.
+  const gp_Pnt& LastDetectedPoint() const { return myLastDetectedPoint; }
+
+  //! Invalidate the position of detected point on the sphere.
+  void ResetLastDetectedPoint()
+  {
+    myLastDetectedPoint = gp_Pnt (RealLast(), RealLast(), RealLast());
+  }
+
 protected:
   gp_Pnt        myCenter;
+  gp_Pnt        myLastDetectedPoint;
   Standard_Real myRadius;
 };
 

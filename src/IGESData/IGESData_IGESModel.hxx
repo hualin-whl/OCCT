@@ -17,14 +17,10 @@
 #ifndef _IGESData_IGESModel_HeaderFile
 #define _IGESData_IGESModel_HeaderFile
 
-#include <TColStd_HSequenceOfHAsciiString.hxx>
 #include <IGESData_GlobalSection.hxx>
 #include <Interface_InterfaceModel.hxx>
 
-class Interface_InterfaceError;
-class IGESData_GlobalSection;
 class IGESData_IGESEntity;
-class Interface_InterfaceModel;
 class Interface_Check;
 class Standard_Transient;
 class TCollection_HAsciiString;
@@ -92,7 +88,10 @@ public:
   Standard_EXPORT void AddStartLine (const Standard_CString line, const Standard_Integer atnum = 0);
   
   //! Returns the Global section of the IGES file.
-  Standard_EXPORT const IGESData_GlobalSection& GlobalSection() const;
+  const IGESData_GlobalSection& GlobalSection() const { return theheader; }
+
+  //! Returns the Global section of the IGES file.
+  IGESData_GlobalSection& ChangeGlobalSection() { return theheader; }
   
   //! Sets the Global section of the IGES file.
   Standard_EXPORT void SetGlobalSection (const IGESData_GlobalSection& header);

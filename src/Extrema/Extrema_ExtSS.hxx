@@ -19,17 +19,12 @@
 
 #include <Standard.hxx>
 #include <Standard_DefineAlloc.hxx>
-#include <Standard_Handle.hxx>
 
 #include <Extrema_ExtElSS.hxx>
 #include <Extrema_SequenceOfPOnSurf.hxx>
-#include <Standard_Real.hxx>
 #include <TColStd_SequenceOfReal.hxx>
 #include <GeomAbs_SurfaceType.hxx>
 #include <Standard_Integer.hxx>
-class StdFail_NotDone;
-class Standard_OutOfRange;
-class Standard_TypeMismatch;
 class Adaptor3d_Surface;
 class Extrema_POnSurf;
 
@@ -63,7 +58,7 @@ public:
   //! Returns True if the distances are found.
   Standard_EXPORT Standard_Boolean IsDone() const;
   
-  //! Returns True if the curve is on a parallel surface.
+  //! Returns True if the surfaces are parallel
   Standard_EXPORT Standard_Boolean IsParallel() const;
   
   //! Returns the number of extremum distances.

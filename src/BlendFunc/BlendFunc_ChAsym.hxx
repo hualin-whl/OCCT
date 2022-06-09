@@ -20,7 +20,6 @@
 #include <Adaptor3d_Surface.hxx>
 #include <gp_Vec.hxx>
 #include <gp_Pnt.hxx>
-#include <math_Vector.hxx>
 #include <math_Matrix.hxx>
 #include <gp_Vec2d.hxx>
 #include <Blend_Function.hxx>
@@ -32,7 +31,6 @@
 #include <TColgp_Array1OfVec.hxx>
 #include <TColgp_Array1OfVec2d.hxx>
 
-class math_Matrix;
 class gp_Lin;
 class Blend_Point;
 

@@ -13,12 +13,9 @@
 
 #include <OpenGl_ShadowMap.hxx>
 
-#include <OpenGl_ArbFBO.hxx>
 #include <OpenGl_FrameBuffer.hxx>
 #include <OpenGl_ShaderManager.hxx>
-#include <Graphic3d_Camera.hxx>
 #include <Graphic3d_CView.hxx>
-#include <Message.hxx>
 #include <Message_Messenger.hxx>
 
 IMPLEMENT_STANDARD_RTTIEXT(OpenGl_ShadowMap, OpenGl_NamedResource)
@@ -29,7 +26,7 @@ IMPLEMENT_STANDARD_RTTIEXT(OpenGl_ShadowMap, OpenGl_NamedResource)
 // =======================================================================
 OpenGl_ShadowMap::OpenGl_ShadowMap()
 : OpenGl_NamedResource ("shadow_map"),
-  myShadowMapFbo (new OpenGl_FrameBuffer()),
+  myShadowMapFbo (new OpenGl_FrameBuffer (myResourceId + ":fbo")),
   myShadowCamera (new Graphic3d_Camera()),
   myShadowMapBias (0.0f)
 {
@@ -89,15 +86,15 @@ bool OpenGl_ShadowMap::UpdateCamera (const Graphic3d_CView& theView,
                                      const gp_XYZ* theOrigin)
 {
   const Bnd_Box aMinMaxBox  = theOrigin == NULL ? theView.MinMaxValues (false) : Bnd_Box(); // applicative min max boundaries
-  const Bnd_Box aGraphicBox = theOrigin == NULL ? theView.MinMaxValues (true)  : Bnd_Box(); // real graphical boundaries (not accounting infinite flag)
+  const Bnd_Box aGraphicBox = aMinMaxBox;
 
   switch (myShadowLight->Type())
   {
-    case Graphic3d_TOLS_AMBIENT:
+    case Graphic3d_TypeOfLightSource_Ambient:
     {
       return false; // not applicable
     }
-    case Graphic3d_TOLS_DIRECTIONAL:
+    case Graphic3d_TypeOfLightSource_Directional:
     {
       if (theOrigin != NULL)
       {
@@ -134,12 +131,12 @@ bool OpenGl_ShadowMap::UpdateCamera (const Graphic3d_CView& theView,
       myLightMatrix = myShadowCamera->ProjectionMatrixF() * myShadowCamera->OrientationMatrixF();
       return true;
     }
-    case Graphic3d_TOLS_POSITIONAL:
+    case Graphic3d_TypeOfLightSource_Positional:
     {
       // render into cubemap shadowmap texture
       return false; // not implemented
     }
-    case Graphic3d_TOLS_SPOT:
+    case Graphic3d_TypeOfLightSource_Spot:
     {
       //myShadowCamera->SetProjectionType (Graphic3d_Camera::Projection_Perspective);
       //myShadowCamera->SetEye (theCastShadowLight->Position());
